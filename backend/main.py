@@ -50,6 +50,12 @@ START_TIME = time.time()
 state = {"phase": "starting", "model_ready": False, "db_ready": False}
 face_cascade = None
 
+# API-driven fault injection (DevOps terminal): when True, /healthz/readiness
+# returns 503 with an explicit message even though the real Postgres/model
+# underneath may be fine. Cleared via POST /api/chaos/recover (or /api/chaos).
+SIMULATED_DB_FAILURE = False
+SIMULATED_MODEL_FAILURE = False
+
 # Active attendance session + ReID safeguard memory.
 # marked_memory mirrors DB so repeats in the same session are instant no-ops
 # and never create duplicate rows (UNIQUE(session_id, student_id) backs it).
@@ -159,6 +165,22 @@ def liveness():
 
 @app.get("/healthz/readiness")
 def readiness():
+    # API-driven fault injection (DevOps terminal) takes precedence: simulated
+    # failures return explicit 503 messages so the frontend can log them.
+    if SIMULATED_DB_FAILURE:
+        return JSONResponse(
+            {"phase": state["phase"], "model_ready": state["model_ready"],
+             "db_ready": False, "uptime_s": round(time.time() - START_TIME, 1),
+             "error": "Database Connection Lost",
+             "simulated_db_failure": True},
+            status_code=503)
+    if SIMULATED_MODEL_FAILURE:
+        return JSONResponse(
+            {"phase": state["phase"], "model_ready": False,
+             "db_ready": state["db_ready"], "uptime_s": round(time.time() - START_TIME, 1),
+             "error": "Model Unloaded",
+             "simulated_model_failure": True},
+            status_code=503)
     # Live-check Postgres so a DB failure flips readiness back to 503 (AC-2);
     # cached flags alone would stay stale at 200 after a mid-run DB kill.
     if state["model_ready"]:
@@ -185,7 +207,9 @@ def status():
     state["db_ready"] = db_ok and state["phase"] == "ready"
     return {"phase": state["phase"], "model_ready": state["model_ready"],
             "db_connected": db_ok, "uptime_s": round(time.time() - START_TIME, 1),
-            "active_session": dict(active_session)}
+            "active_session": dict(active_session),
+            "simulated_db_failure": SIMULATED_DB_FAILURE,
+            "simulated_model_failure": SIMULATED_MODEL_FAILURE}
 
 
 class ChaosIn(BaseModel):
@@ -194,18 +218,76 @@ class ChaosIn(BaseModel):
 
 @app.post("/api/chaos")
 def chaos(c: ChaosIn):
-    """Simulate service disconnects for the frontend chaos button."""
+    """Simulate service disconnects for the frontend chaos button.
+
+    Legacy combined endpoint (kept for tests/fault_injection.py). Kept in
+    sync with the SIMULATED_* flags so both chaos interfaces agree.
+    """
+    global SIMULATED_DB_FAILURE, SIMULATED_MODEL_FAILURE
     if c.failure == "db_drop":
+        SIMULATED_DB_FAILURE = True
         engine.dispose()
         state["db_ready"] = False
         state["phase"] = "chaos: postgres unreachable"
     elif c.failure == "model_unload":
+        SIMULATED_MODEL_FAILURE = True
         state["model_ready"] = False
         state["phase"] = "chaos: model unloaded"
     elif c.failure == "recover":
+        SIMULATED_DB_FAILURE = False
+        SIMULATED_MODEL_FAILURE = False
         state["phase"] = "reloading"
         threading.Thread(target=load_heavy_model, daemon=True).start()
     return {"phase": state["phase"]}
+
+
+# ----------------------------------------------------------------------------
+# Granular fault-injection endpoints for the DevOps terminal.
+# Each returns a clear JSON body so the frontend can log the result.
+# ----------------------------------------------------------------------------
+@app.post("/api/chaos/db-drop")
+def chaos_db_drop():
+    """Simulate losing the database: readiness -> 503 'Database Connection Lost'."""
+    global SIMULATED_DB_FAILURE
+    SIMULATED_DB_FAILURE = True
+    try:
+        engine.dispose()
+    except Exception:
+        pass
+    state["db_ready"] = False
+    state["phase"] = "chaos: postgres unreachable (simulated)"
+    return {"ok": True, "failure": "db_drop",
+            "simulated_db_failure": True,
+            "phase": state["phase"],
+            "message": "Simulated DB failure injected; /healthz/readiness now returns 503"}
+
+
+@app.post("/api/chaos/unload-model")
+def chaos_unload_model():
+    """Simulate losing the model: readiness -> 503 'Model Unloaded'."""
+    global SIMULATED_MODEL_FAILURE
+    SIMULATED_MODEL_FAILURE = True
+    state["model_ready"] = False
+    state["phase"] = "chaos: model unloaded (simulated)"
+    return {"ok": True, "failure": "model_unload",
+            "simulated_model_failure": True,
+            "phase": state["phase"],
+            "message": "Simulated model failure injected; /healthz/readiness now returns 503"}
+
+
+@app.post("/api/chaos/recover")
+def chaos_recover():
+    """Clear all simulated failures and reload model + DB checks."""
+    global SIMULATED_DB_FAILURE, SIMULATED_MODEL_FAILURE
+    SIMULATED_DB_FAILURE = False
+    SIMULATED_MODEL_FAILURE = False
+    state["phase"] = "reloading"
+    threading.Thread(target=load_heavy_model, daemon=True).start()
+    return {"ok": True, "failure": "recover",
+            "simulated_db_failure": False,
+            "simulated_model_failure": False,
+            "phase": state["phase"],
+            "message": "Recovering; /healthz/readiness returns 200 OK once reload completes"}
 
 
 # ============================================================================
