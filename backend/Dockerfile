@@ -6,9 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    fastapi "uvicorn[standard]" "opencv-python-headless==4.10.0.84" numpy sqlalchemy psycopg2-binary
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
+COPY app/ ./app/
 COPY main.py .
 
 ENV DATABASE_URL=postgresql://analytics:analytics@db:5432/analytics \
