@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { chaos } from "../api/marp";
+import { chaos, exportTelemetryCsv } from "../api/marp";
 import { useMARP } from "../context/MARPContext";
 
 export default function ChaosControlPanel() {
@@ -104,6 +104,24 @@ export default function ChaosControlPanel() {
           <button onClick={() => run("db-drop")} className="nb-btn nb-btn-red text-xs">DB DROP</button>
           <button onClick={() => run("unload-model")} className="nb-btn nb-btn-black text-xs">UNLOAD MODEL</button>
           <button onClick={() => run("recover")} className="nb-btn nb-btn-white text-xs">RECOVER</button>
+        </div>
+        <div className="border-t-2 border-black pt-3">
+          <button
+            onClick={async () => {
+              try {
+                pushTerm("EXPORT: downloading marp_research_data.csv…", "info");
+                await exportTelemetryCsv();
+                setMsg("Telemetry exported → marp_research_data.csv");
+                pushTerm("EXPORT: marp_research_data.csv saved", "ok");
+              } catch (e) {
+                setMsg(`Export failed: ${e.message}`);
+                pushTerm(`EXPORT failed: ${e.message}`, "err");
+              }
+            }}
+            className="brutal-btn w-full border-4 border-black bg-black px-6 py-3 text-[#E2FF00] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+            ⤓ EXPORT TELEMETRY (CSV)
+          </button>
+          <p className="mt-1 font-mono text-[11px] uppercase">Research dump: state changes + flattened chaos knobs</p>
         </div>
         {msg && <p className="border-2 border-black bg-paper p-2 font-mono text-xs">{msg}</p>}
       </div>

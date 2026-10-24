@@ -67,6 +67,7 @@ class MARPEngine:
             self.stage = stage
             if phase is not None:
                 state["phase"] = phase
+        _log_telemetry_async("STATE_CHANGE")
 
     def mark_ready(self, backend: str, duration_ms: float, vram_mb: float) -> None:
         with self._state_lock:
@@ -77,12 +78,14 @@ class MARPEngine:
             self.last_error = None
             state["model_ready"] = True
             state["phase"] = "ready"
+        _log_telemetry_async("STATE_CHANGE")
 
     def mark_failed(self, error: str, phase: str) -> None:
         with self._state_lock:
             self.stage = "FAILED"
             self.last_error = error
             state["phase"] = phase
+        _log_telemetry_async("STATE_CHANGE")
 
     def chaos_snapshot(self) -> Dict[str, Any]:
         with self._state_lock:
@@ -306,6 +309,7 @@ def apply_chaos(payload: Dict[str, Any]) -> Dict[str, Any]:
         state["phase"] = "chaos: probe refusal (in-situ)"
     elif update.get("simulate_vram_exhaustion"):
         state["phase"] = "chaos: vram exhausted (in-situ)"
+    _log_telemetry_async("CHAOS_INJECTED")
     return dict(chaos_knobs)
 
 
@@ -317,6 +321,7 @@ def reset_chaos() -> Dict[str, Any]:
     if state.get("phase", "").startswith("chaos") or state.get("phase", "").startswith("detector_failed"):
         state["phase"] = "reloading"
         start_background_load()
+    _log_telemetry_async("CHAOS_RESET")
     return dict(chaos_knobs)
 
 
@@ -346,7 +351,69 @@ def inject(failure: str):
                             "artificial_probe_failure": False})
         state["phase"] = "reloading"
         start_background_load()
+    _log_telemetry_async("CHAOS_INJECTED" if failure != "recover" else "CHAOS_RESET")
     return {"phase": state["phase"]}
+
+
+def _log_telemetry_async(event_type: str) -> None:
+    """Fire-and-forget persistent telemetry insert (never blocks inference).
+
+    Captures stage/phase + VRAM + load-duration + chaos snapshot at event
+    time. Table is auto-created so fresh volumes and pre-existing volumes
+    both work; all DB errors are swallowed — in-memory MARP stays live even
+    if Postgres is down (chaos drills depend on this).
+    """
+    try:
+        with ENGINE._state_lock:
+            snapshot = {
+                "phase": state.get("phase", ""),
+                "vram": float(ENGINE.vram_allocated_mb or 0.0),
+                "load_ms": float(ENGINE.model_load_duration_ms or 0.0),
+                "chaos": dict(chaos_knobs),
+            }
+    except Exception:
+        return
+
+    def _insert() -> None:
+        try:
+            from ..core.database import Base, engine
+            from ..models.telemetry import MarpTelemetry  # noqa: F401 (register table)
+            try:
+                Base.metadata.create_all(engine, tables=[
+                    MarpTelemetry.__table__])  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    Base.metadata.create_all(engine)
+                except Exception:
+                    pass
+            from ..core.database import SessionLocal
+            s = SessionLocal()
+            try:
+                s.add(MarpTelemetry(
+                    event_type=event_type,
+                    phase=snapshot["phase"],
+                    vram_allocated_mb=snapshot["vram"],
+                    load_duration_ms=snapshot["load_ms"],
+                    active_chaos_params=snapshot["chaos"],
+                ))
+                s.commit()
+            except Exception:
+                try:
+                    s.rollback()
+                except Exception:
+                    pass
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_insert, daemon=True).start()
+    except Exception:
+        pass
 
 
 def session_lock():

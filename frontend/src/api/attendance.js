@@ -1,4 +1,4 @@
-import { v1, request } from "./client";
+import { API, v1, request } from "./client";
 
 export const startSession = (session_name) =>
   v1("/attendance/start",
@@ -29,7 +29,7 @@ export const detectAnnotated = (image) =>
     "/api/detect/annotated");
 
 export const exportCsvUrl = (session_id) =>
-  `${(process.env.REACT_APP_API_URL || "http://localhost:8000")}/api/v1/attendance/export.csv?session_id=${session_id}`;
+  `${API}/api/v1/attendance/export.csv?session_id=${session_id}`;
 
 export const recentLogs = (limit = 20) => request(`/api/logs?limit=${limit}`);
 

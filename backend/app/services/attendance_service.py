@@ -1,4 +1,4 @@
-"""Session lifecycle + roster + CSV export."""
+"""Session lifecycle + roster + CSV export + live-frame pipeline."""
 import csv
 import io
 from datetime import datetime
@@ -117,3 +117,62 @@ def export_csv(sid: int) -> str:
     for r in summary["records"]:
         w.writerow(r)
     return buf.getvalue()
+
+
+def process_live_frame(image_b64: str) -> dict:
+    """Secure live-frame pipeline for `/ws/detect`.
+
+    Accepts a base64 JPEG (data-URL or raw), runs
+    `face_recognition.detect_and_identify()` — which internally calls
+    `maybe_mark_present()` with `marked_memory` deduplication — then logs
+    detections. Returns dets + newly-marked ids + active session so the
+    frontend can update roll call without an extra roster round-trip.
+
+    `marked_memory` guarantees idempotency: a student already present in
+    the active session is NOT re-written (DB UPDATE skipped, returns False).
+    """
+    from fastapi import HTTPException
+
+    from . import face_detection as fd
+    from . import face_recognition as fr
+
+    if not image_b64:
+        raise HTTPException(status_code=422, detail="empty frame")
+    try:
+        raw = fd.decode_frame(image_b64)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"invalid frame: {e}")
+
+    # Snapshot dedup set so we can report who was *newly* marked by this frame.
+    try:
+        before = set(marp.marked_memory)
+        active_id = marp.active_session.get("id")
+    except Exception:
+        before, active_id = set(), None
+
+    dets = fr.detect_and_identify(raw)
+    try:
+        fr.log_detections(dets)
+    except Exception:
+        pass
+
+    newly_marked: list[str] = []
+    try:
+        after = set(marp.marked_memory)
+        for sid in {
+            str(d.get("student_id") or "")
+            for d in dets
+            if d.get("student_id")
+        }:
+            if active_id is not None and (active_id, sid) in after and (active_id, sid) not in before:
+                newly_marked.append(sid)
+    except Exception:
+        newly_marked = []
+
+    return {
+        "detections": dets,
+        "newly_marked": newly_marked,
+        "active_session": dict(marp.active_session),
+    }

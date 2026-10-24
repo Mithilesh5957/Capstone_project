@@ -1,9 +1,12 @@
 """MARP probes + in-situ chaos (/api/v1/marp/*). Mirrors legacy /healthz contract."""
+import csv
+import io
 import time
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
-from ..core.database import engine
+from ..core.database import SessionLocal, engine
+from ..core.security import require_admin
 from ..schemas.marp import ChaosConfig, ChaosIn, ChaosTune
 from ..services import marp_engine as marp
 
@@ -49,9 +52,9 @@ def status():
             "simulated_model_failure": marp.SIMULATED_MODEL_FAILURE}
 
 
-# ---- new spec surface ----
+# ---- new spec surface (operator-guarded) ----
 @router.post("/chaos/inject")
-def chaos_inject(cfg: ChaosConfig):
+def chaos_inject(cfg: ChaosConfig, _admin: dict = Depends(require_admin)):
     chaos = marp.apply_chaos(cfg.model_dump())
     return {"ok": True, "chaos": chaos, "marp_state": marp.marp_state(),
             "stage": marp.ENGINE.stage,
@@ -68,7 +71,7 @@ def chaos_status():
 
 
 @router.post("/chaos/reset")
-def chaos_reset():
+def chaos_reset(_admin: dict = Depends(require_admin)):
     chaos = marp.reset_chaos()
     return {"ok": True, "chaos": chaos, "marp_state": marp.marp_state(),
             "stage": marp.ENGINE.stage,
@@ -76,13 +79,15 @@ def chaos_reset():
 
 
 # ---- legacy compat (kept for old UI + fault_injection tests) ----
+# NOTE: legacy chaos endpoints remain unauthenticated for DevOps harness
+# compatibility; new /chaos/inject|reset|tune paths above require JWT admin.
 @router.post("/chaos")
 def chaos(c: ChaosIn):
     return marp.inject(c.failure)
 
 
 @router.post("/chaos/db-drop")
-def db_drop():
+def db_drop(_admin: dict = Depends(require_admin)):
     marp.SIMULATED_DB_FAILURE = True
     try:
         engine.dispose()
@@ -96,7 +101,7 @@ def db_drop():
 
 
 @router.post("/chaos/unload-model")
-def unload_model():
+def unload_model(_admin: dict = Depends(require_admin)):
     marp.SIMULATED_MODEL_FAILURE = True
     marp.state["model_ready"] = False
     marp.state["phase"] = "chaos: model unloaded (simulated)"
@@ -106,7 +111,7 @@ def unload_model():
 
 
 @router.post("/chaos/recover")
-def recover():
+def recover(_admin: dict = Depends(require_admin)):
     marp.SIMULATED_DB_FAILURE = False
     marp.SIMULATED_MODEL_FAILURE = False
     marp.state["phase"] = "reloading"
@@ -116,7 +121,7 @@ def recover():
 
 
 @router.post("/chaos/tune")
-def tune(t: ChaosTune):
+def tune(t: ChaosTune, _admin: dict = Depends(require_admin)):
     marp.chaos_knobs.update({"vram_latency_s": max(0.0, t.vram_latency_s),
                              "frame_drop_rate": min(1.0, max(0.0, t.frame_drop_rate)),
                              "model_stall": bool(t.model_stall)})
@@ -124,3 +129,69 @@ def tune(t: ChaosTune):
         marp.state["phase"] = "chaos: model stalled (in-situ)"
     return {"ok": True, "chaos": dict(marp.chaos_knobs),
             "marp_state": marp.marp_state()}
+
+
+# ---- research telemetry export (Phase 5, operator-guarded) ----
+CHAOS_EXPORT_KEYS = (
+    "simulated_latency_sec",
+    "frame_drop_rate",
+    "simulate_vram_exhaustion",
+    "artificial_probe_failure",
+    "model_stall",
+    "vram_latency_s",
+)
+
+
+@router.get("/telemetry/export")
+def telemetry_export(
+    _admin: dict = Depends(require_admin),
+    limit: int = Query(default=5000, ge=1, le=50000),
+):
+    """Download MARP research data as CSV (`marp_research_data.csv`).
+
+    Flattens the JSONB `active_chaos_params` into one `chaos_<key>` column
+    per knob so researchers can plot directly in Excel/Python without
+    JSON parsing.
+    """
+    from ..models.telemetry import MarpTelemetry  # noqa: F401 (register table)
+
+    s = SessionLocal()
+    try:
+        rows = (
+            s.query(MarpTelemetry)
+            .order_by(MarpTelemetry.id.asc())
+            .limit(limit)
+            .all()
+        )
+        buf = io.StringIO()
+        fieldnames = [
+            "id", "timestamp", "event_type", "phase",
+            "vram_allocated_mb", "load_duration_ms",
+            *[f"chaos_{k}" for k in CHAOS_EXPORT_KEYS],
+        ]
+        w = csv.DictWriter(buf, fieldnames=fieldnames)
+        w.writeheader()
+        for r in rows:
+            chaos = r.active_chaos_params or {}
+            if not isinstance(chaos, dict):
+                chaos = {}
+            out = {
+                "id": r.id,
+                "timestamp": r.timestamp.isoformat() if r.timestamp else "",
+                "event_type": r.event_type or "",
+                "phase": r.phase or "",
+                "vram_allocated_mb": r.vram_allocated_mb,
+                "load_duration_ms": r.load_duration_ms,
+            }
+            for k in CHAOS_EXPORT_KEYS:
+                v = chaos.get(k, "")
+                out[f"chaos_{k}"] = v if not isinstance(v, (dict, list)) else str(v)
+            w.writerow(out)
+        data = buf.getvalue()
+    finally:
+        s.close()
+    return PlainTextResponse(
+        data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=marp_research_data.csv"},
+    )

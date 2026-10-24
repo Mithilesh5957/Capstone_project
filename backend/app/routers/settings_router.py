@@ -1,6 +1,7 @@
 """Detection parameter tuning (/api/v1/settings)."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from ..core import config
+from ..core.security import require_admin
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 
@@ -16,7 +17,7 @@ def get_detection():
 
 
 @router.post("/detection")
-def set_detection(body: dict):
+def set_detection(body: dict, _admin: dict = Depends(require_admin)):
     if "reid_threshold" in body:
         v = float(body["reid_threshold"])
         config.REID_THRESHOLD = min(2.0, max(0.1, v))

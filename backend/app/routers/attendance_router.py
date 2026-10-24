@@ -1,9 +1,10 @@
 import base64
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse
 from ..core import config
 from ..core.database import SessionLocal
+from ..core.security import require_admin, verify_token
 from ..models.attendance import AttendanceRecord
 from ..schemas.attendance import FrameIn, OverrideIn, StartIn
 from ..services import attendance_service as svc
@@ -22,12 +23,12 @@ def _guard_ready():
 
 
 @router.post("/start")
-def start(body: StartIn):
+def start(body: StartIn, _admin: dict = Depends(require_admin)):
     return svc.start_session(body.session_name)
 
 
 @router.post("/stop")
-def stop():
+def stop(_admin: dict = Depends(require_admin)):
     return svc.stop_session()
 
 
@@ -66,7 +67,7 @@ def export_csv(session_id: int):
 
 
 @router.post("/override")
-def override(body: OverrideIn):
+def override(body: OverrideIn, _admin: dict = Depends(require_admin)):
     if body.status not in ("Present", "Absent"):
         raise HTTPException(status_code=422, detail="status must be Present|Absent")
     s = SessionLocal()
@@ -128,19 +129,68 @@ def detect_annotated(frame: FrameIn):
 
 @router.websocket("/ws/detect")
 async def detect_ws(ws: WebSocket):
+    """Secure live inference socket.
+
+    Auth: `?token=<JWT>` query param (browsers cannot set WS headers).
+    Flow: accept -> verify JWT -> loop { recv JSON {image} -> MARP-ready
+    guard -> svc.process_live_frame() (detect + dedup-mark + log) -> send
+    {detections, newly_marked, active_session} }.
+    Backpressure is cooperative: client MUST wait for this ack (or 1s
+    timeout) before sending the next frame, keeping Edge CPU bounded.
+    """
+    # Accept first so we can close with a policy code on auth failure.
     await ws.accept()
+    token = ws.query_params.get("token", "")
+    payload = verify_token(token) if token else None
+    if payload is None or not payload.get("sub"):
+        try:
+            await ws.close(code=4401)
+        except Exception:
+            pass
+        return
     try:
         while True:
-            msg = await ws.receive_json()
-            if not marp.state["model_ready"]:
-                await ws.send_json({"error": "model loading",
-                                    "phase": marp.state["phase"]})
+            try:
+                msg = await ws.receive_json()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                # Malformed frame envelope — nack and keep socket alive.
+                try:
+                    await ws.send_json({"error": "invalid json envelope"})
+                except Exception:
+                    break
                 continue
-            raw = fd.decode_frame(msg.get("image", ""))
-            dets = fr.detect_and_identify(raw)
-            fr.log_detections(dets)
-            await ws.send_json({"detections": dets,
-                                "active_session": dict(marp.active_session)})
+            if not marp.state["model_ready"]:
+                try:
+                    await ws.send_json({"error": "model loading",
+                                        "phase": marp.state["phase"],
+                                        "detections": [],
+                                        "active_session": dict(marp.active_session)})
+                except Exception:
+                    break
+                continue
+            try:
+                result = svc.process_live_frame(msg.get("image", ""))
+            except HTTPException as e:
+                try:
+                    await ws.send_json({"error": e.detail, "detections": []})
+                except Exception:
+                    break
+                continue
+            except Exception as e:
+                try:
+                    await ws.send_json({"error": f"inference failed: {e}",
+                                        "detections": []})
+                except Exception:
+                    break
+                continue
+            try:
+                await ws.send_json(result)
+            except (WebSocketDisconnect, RuntimeError):
+                break
+            except Exception:
+                break
     except WebSocketDisconnect:
         pass
     except Exception:

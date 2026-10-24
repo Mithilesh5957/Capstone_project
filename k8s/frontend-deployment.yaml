@@ -1,0 +1,64 @@
+# FACEATTEND frontend — Neo-brutalist UI (nginx :80).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faceattend-frontend-config
+  labels:
+    app: faceattend-frontend
+data:
+  # Baked as VITE_API_URL at `docker build`; override per environment.
+  VITE_API_URL: "http://faceattend-backend:8000/api/v1"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faceattend-frontend
+  labels:
+    app: faceattend-frontend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: faceattend-frontend
+  template:
+    metadata:
+      labels:
+        app: faceattend-frontend
+    spec:
+      containers:
+        - name: faceattend-frontend
+          image: ghcr.io/faceattend/frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: VITE_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-frontend-config
+                  key: VITE_API_URL
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

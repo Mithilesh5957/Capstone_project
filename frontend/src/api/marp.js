@@ -38,3 +38,32 @@ export const tuneChaos = (knobs) =>
 export const detectionSettings = () => request("/api/v1/settings/detection");
 export const updateDetectionSettings = (body) =>
   request("/api/v1/settings/detection", { method: "POST", body: JSON.stringify(body) });
+
+function _bearer() {
+  try {
+    const raw = localStorage.getItem("face_portal_session");
+    const s = JSON.parse(raw || "null");
+    if (s?.token) return `Bearer ${s.token}`;
+  } catch { /* ignore */ }
+  return "";
+}
+
+export const exportTelemetryCsv = async () => {
+  const r = await fetch(`${API}/api/v1/marp/telemetry/export`, {
+    headers: { Authorization: _bearer() },
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(t || `Export failed (HTTP ${r.status})`);
+  }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "marp_research_data.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return true;
+};

@@ -1,42 +1,54 @@
-"""Auth helpers: mock college SSO + lightweight HMAC token (no extra deps)."""
-import base64
-import hashlib
-import hmac
-import json
-import time
-from .config import JWT_SECRET, JWT_TTL_S
+"""FACEATTEND auth core: bcrypt hashing + JWT (python-jose) + FastAPI guards.
+
+Secrets are env-driven with a secure dev fallback. Production MUST set JWT_SECRET.
+"""
+import os
+from datetime import datetime, timedelta, timezone
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+
+from .config import JWT_ALG, JWT_TTL_S
+
+JWT_SECRET = os.getenv("JWT_SECRET", "faceattend-dev-secret-change-in-prod-32chars!")
+if len(JWT_SECRET) < 32:
+    # Enforce minimum entropy even for the fallback; pad deterministically.
+    JWT_SECRET = (JWT_SECRET + "-faceattend-pad-32chars-minimum").ljust(32, "0")
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def _b64e(b: bytes) -> str:
-    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
 
 
-def _b64d(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return pwd_context.verify(plain, hashed)
+    except Exception:
+        return False
 
 
-def create_token(sub: str, role: str) -> str:
-    header = _b64e(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = _b64e(json.dumps(
-        {"sub": sub, "role": role, "exp": int(time.time()) + JWT_TTL_S}
-    ).encode())
-    sig = _b64e(hmac.new(JWT_SECRET.encode(), f"{header}.{payload}".encode(),
-                         hashlib.sha256).digest())
-    return f"{header}.{payload}.{sig}"
+def create_token(sub: str, role: str, expires_s: int | None = None) -> str:
+    ttl = expires_s if expires_s is not None else JWT_TTL_S
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": sub,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=ttl)).timestamp()),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
 def verify_token(token: str):
+    """Return payload dict or None if invalid/expired."""
     try:
-        header, payload, sig = token.split(".")
-        expect = _b64e(hmac.new(JWT_SECRET.encode(), f"{header}.{payload}".encode(),
-                                hashlib.sha256).digest())
-        if not hmac.compare_digest(expect, sig):
-            return None
-        data = json.loads(_b64d(payload))
-        if data.get("exp", 0) < time.time():
-            return None
-        return data
-    except Exception:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except JWTError:
         return None
 
 
@@ -46,3 +58,29 @@ def classify_login(username: str, role_hint: str) -> str:
     if hint == "admin" or u.lower().startswith("admin") or "teacher" in u.lower():
         return "admin"
     return "student"
+
+
+def get_current_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+):
+    """FastAPI dependency: validates `Authorization: Bearer <JWT>`."""
+    if creds is None or not creds.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    payload = verify_token(creds.credentials)
+    if payload is None or not payload.get("sub"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return {"sub": payload.get("sub"), "role": payload.get("role", "")}
+
+
+def require_admin(user: dict = Depends(get_current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="operator privileges required")
+    return user

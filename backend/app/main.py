@@ -19,6 +19,7 @@ from .models.detection import DetectionEvent  # noqa: F401 (register tables)
 from .models.student import Student  # noqa: F401
 from .models.attendance import AttendanceSession, AttendanceRecord  # noqa: F401
 from .models.user import User  # noqa: F401
+from .models.telemetry import MarpTelemetry  # noqa: F401 (research telemetry)
 from .routers import (attendance_router, auth_router, marp_router,
                       settings_router, students_router)
 from .schemas.attendance import FrameIn, OverrideIn, StartIn
@@ -138,19 +139,52 @@ def legacy_detect_annotated(frame: FrameIn):
 
 @app.websocket("/ws/detect")
 async def legacy_ws(ws: WebSocket):
+    """Legacy WS mirror — same JWT ?token= guard + process_live_frame()."""
+    from .core.security import verify_token as _verify
+
     await ws.accept()
+    token = ws.query_params.get("token", "")
+    payload = _verify(token) if token else None
+    if payload is None or not payload.get("sub"):
+        try:
+            await ws.close(code=4401)
+        except Exception:
+            pass
+        return
     try:
         while True:
-            msg = await ws.receive_json()
-            if not marp.state["model_ready"]:
-                await ws.send_json({"error": "model loading",
-                                    "phase": marp.state["phase"]})
+            try:
+                msg = await ws.receive_json()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                try:
+                    await ws.send_json({"error": "invalid json envelope"})
+                except Exception:
+                    break
                 continue
-            raw = fd.decode_frame(msg.get("image", ""))
-            dets = fr.detect_and_identify(raw)
-            fr.log_detections(dets)
-            await ws.send_json({"detections": dets,
-                                "active_session": dict(marp.active_session)})
+            if not marp.state["model_ready"]:
+                try:
+                    await ws.send_json({"error": "model loading",
+                                        "phase": marp.state["phase"],
+                                        "detections": [],
+                                        "active_session": dict(marp.active_session)})
+                except Exception:
+                    break
+                continue
+            try:
+                result = svc.process_live_frame(msg.get("image", ""))
+            except Exception as e:
+                try:
+                    await ws.send_json({"error": f"inference failed: {e}",
+                                        "detections": []})
+                except Exception:
+                    break
+                continue
+            try:
+                await ws.send_json(result)
+            except Exception:
+                break
     except WebSocketDisconnect:
         pass
     except Exception:

@@ -44,3 +44,15 @@ CREATE TABLE IF NOT EXISTS users (
     role VARCHAR(20) NOT NULL DEFAULT 'admin',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS marp_telemetry (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_type VARCHAR(50) NOT NULL,
+    phase VARCHAR(100) NOT NULL DEFAULT '',
+    vram_allocated_mb DOUBLE PRECISION NOT NULL DEFAULT 0,
+    load_duration_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+    active_chaos_params JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_marp_telemetry_timestamp ON marp_telemetry (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_marp_telemetry_event ON marp_telemetry (event_type);

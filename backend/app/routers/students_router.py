@@ -1,7 +1,8 @@
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from ..core.database import SessionLocal
+from ..core.security import require_admin
 from ..models.student import Student
 from ..schemas.student import EnrollIn
 from ..services import face_detection as fd
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/api/v1/students", tags=["students"])
 
 
 @router.post("/enroll")
-def enroll(body: EnrollIn):
+def enroll(body: EnrollIn, _admin: dict = Depends(require_admin)):
     if not marp.state["model_ready"]:
         return JSONResponse({"error": "model loading", "phase": marp.state["phase"]},
                             status_code=503)

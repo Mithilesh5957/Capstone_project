@@ -1,8 +1,41 @@
-const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
+// FACEATTEND API client — Vite-first (VITE_API_URL), CRA fallback.
+const _viteApi =
+  typeof import.meta !== "undefined" &&
+  import.meta &&
+  import.meta.env &&
+  import.meta.env.VITE_API_URL
+    ? import.meta.env.VITE_API_URL
+    : null;
+
+// eslint-disable-next-line no-undef
+const _craApi =
+  typeof process !== "undefined" &&
+  process &&
+  process.env &&
+  process.env.REACT_APP_API_URL
+    ? process.env.REACT_APP_API_URL
+    : null;
+
+const API = _viteApi || _craApi || "http://localhost:8000";
+
+function authHeaders() {
+  try {
+    const raw =
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("face_portal_session")
+        : null;
+    if (!raw) return {};
+    const s = JSON.parse(raw);
+    if (s && s.token) return { Authorization: `Bearer ${s.token}` };
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
 
 async function request(path, opts = {}) {
   const r = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) },
     ...opts,
   });
   const data = await r.json().catch(() => ({}));

@@ -1,47 +1,78 @@
+# FACEATTEND production compose — pre-built images, env-driven secrets.
+# Production: `docker compose up -d --build` (no source mounts).
+# Development (live reload): `docker compose --profile development up -d --build`
+#   uses `backend-dev` below, which mounts ./backend:/app.
 services:
   db:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: analytics
-      POSTGRES_PASSWORD: analytics
-      POSTGRES_DB: analytics
+      POSTGRES_USER: ${POSTGRES_USER:-analytics}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-analytics}
+      POSTGRES_DB: ${POSTGRES_DB:-analytics}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     healthcheck:
-      # Explicit DB health check
-      test: ["CMD-SHELL", "pg_isready -U analytics -d analytics"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-analytics} -d ${POSTGRES_DB:-analytics}"]
       interval: 5s
       timeout: 5s
       retries: 5
       start_period: 10s
 
   backend:
+    image: faceattend-backend:latest
     build: ./backend
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
-      DATABASE_URL: postgresql://analytics:analytics@db:5432/analytics
-      MODEL_LOAD_SECONDS: 15
+      DATABASE_URL: ${DATABASE_URL:-postgresql://analytics:analytics@db:5432/analytics}
+      MODEL_LOAD_SECONDS: ${MODEL_LOAD_SECONDS:-15}
+      JWT_SECRET: ${JWT_SECRET:-default_dev_secret_change_me}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@college.edu}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      YOLO_WEIGHTS: ${YOLO_WEIGHTS:-yolov8n-face.pt}
+      FACE_BACKEND_ORDER: ${FACE_BACKEND_ORDER:-yolo,mediapipe,haar}
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      # Healthy only when model weights are loaded AND db is verified
-      # (mirrors backend/main.py: /healthz/readiness returns 503 while loading, 200 when ready)
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthz/readiness || exit 1"]
+      # Healthy only when MARP READY (weights + DB); 503 while LOADING_WEIGHTS.
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/marp/healthz/readiness || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 30s
 
+  # Development-only live-reload backend (source mount). Never used in prod.
+  backend-dev:
+    profiles: ["development"]
+    build: ./backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://analytics:analytics@db:5432/analytics}
+      MODEL_LOAD_SECONDS: ${MODEL_LOAD_SECONDS:-5}
+      JWT_SECRET: ${JWT_SECRET:-default_dev_secret_change_me}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@college.edu}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+    depends_on:
+      db:
+        condition: service_healthy
+
   frontend:
+    image: faceattend-frontend:latest
     build:
       context: ./frontend
       args:
-        REACT_APP_API_URL: http://localhost:8000
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api/v1}
+        REACT_APP_API_URL: ${REACT_APP_API_URL:-http://localhost:8000}
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       backend:
         condition: service_healthy
