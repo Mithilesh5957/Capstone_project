@@ -32,16 +32,17 @@ def stop(_admin: dict = Depends(require_admin)):
     return svc.stop_session()
 
 
-@router.get("/roster")
-def roster(session_id: int | None = None):
+def roster_impl(session_id: int | None = None):
+    """Shared roster logic. Callers must enforce auth at their boundary
+    (direct calls to the route handler would bypass its Depends)."""
     sid = session_id if session_id is not None else marp.active_session["id"]
     if sid is None:
         return {"session_id": None, "records": []}
     return svc.session_summary(sid)
 
 
-@router.get("/sessions")
-def sessions(limit: int = 20):
+def sessions_impl(limit: int = 20):
+    """Shared sessions logic. Callers must enforce auth at their boundary."""
     from ..models.attendance import AttendanceSession
     s = SessionLocal()
     try:
@@ -59,8 +60,18 @@ def sessions(limit: int = 20):
         s.close()
 
 
+@router.get("/roster")
+def roster(session_id: int | None = None, _admin: dict = Depends(require_admin)):
+    return roster_impl(session_id)
+
+
+@router.get("/sessions")
+def sessions(limit: int = 20, _admin: dict = Depends(require_admin)):
+    return sessions_impl(limit)
+
+
 @router.get("/export.csv")
-def export_csv(session_id: int):
+def export_csv(session_id: int, _admin: dict = Depends(require_admin)):
     return PlainTextResponse(svc.export_csv(session_id), media_type="text/csv",
                              headers={"Content-Disposition":
                                       f"attachment; filename=session_{session_id}.csv"})
@@ -101,18 +112,19 @@ def override(body: OverrideIn, _admin: dict = Depends(require_admin)):
 
 
 @router.post("/detect")
-def detect(frame: FrameIn):
+def detect(frame: FrameIn, _admin: dict = Depends(require_admin)):
     g = _guard_ready()
     if g:
         return g
     raw = fd.decode_frame(frame.image)
     dets = fr.detect_and_identify(raw)
     fr.log_detections(dets)
-    return {"detections": dets, "active_session": dict(marp.active_session)}
+    return {"detections": dets, "active_session": marp.session_snapshot()}
 
 
-@router.post("/detect/annotated")
-def detect_annotated(frame: FrameIn):
+def detect_annotated_impl(frame: FrameIn):
+    """Shared annotated-detect logic. Callers must enforce auth at their own
+    route boundary."""
     g = _guard_ready()
     if g:
         return g
@@ -124,7 +136,12 @@ def detect_annotated(frame: FrameIn):
                 if annotated else None)
     return {"detections": dets, "image": data_url,
             "size": {"w": config.FRAME_W, "h": config.FRAME_H},
-            "active_session": dict(marp.active_session)}
+            "active_session": marp.session_snapshot()}
+
+
+@router.post("/detect/annotated")
+def detect_annotated(frame: FrameIn, _admin: dict = Depends(require_admin)):
+    return detect_annotated_impl(frame)
 
 
 @router.websocket("/ws/detect")
@@ -139,12 +156,20 @@ async def detect_ws(ws: WebSocket):
     timeout) before sending the next frame, keeping Edge CPU bounded.
     """
     # Accept first so we can close with a policy code on auth failure.
+    # R1: live inference also marks attendance, so operator role is required
+    # (a student JWT alone must not drive the marking pipeline).
     await ws.accept()
     token = ws.query_params.get("token", "")
     payload = verify_token(token) if token else None
     if payload is None or not payload.get("sub"):
         try:
             await ws.close(code=4401)
+        except Exception:
+            pass
+        return
+    if payload.get("role") != "admin":
+        try:
+            await ws.close(code=4403)
         except Exception:
             pass
         return
@@ -166,7 +191,7 @@ async def detect_ws(ws: WebSocket):
                     await ws.send_json({"error": "model loading",
                                         "phase": marp.state["phase"],
                                         "detections": [],
-                                        "active_session": dict(marp.active_session)})
+                                        "active_session": marp.session_snapshot()})
                 except Exception:
                     break
                 continue

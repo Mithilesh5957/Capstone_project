@@ -14,13 +14,31 @@ const ANGLES = ["Front", "Left Profile", "Right Profile", "Upper Angle"];
 const BRANCHES = ["CSE", "ECE", "ME", "AI&DS", "EEE", "BT"];
 const FILTERS = ["ALL", ...BRANCHES];
 
+function sessionToken() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_KEY) || "null")?.token || "";
+  } catch {
+    return "";
+  }
+}
+
 async function api(path, opts = {}) {
+  const token = sessionToken();
   const r = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
   });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.detail || data.error || `HTTP ${r.status}`);
+  if (!r.ok) {
+    const err = new Error(data.detail || data.error || `HTTP ${r.status}`);
+    err.status = r.status;
+    err.data = data;
+    throw err;
+  }
   return data;
 }
 const snapshot = (video, w = 320, h = 240) => {
@@ -40,7 +58,29 @@ function loadSession() {
 
 export default function App() {
   const [session, setSession] = useState(loadSession);
-  const role = session?.role || "Admin";
+  // Backend roles are lowercase ("admin"/"student"); normalize for display.
+  const role = (session?.role || "").toLowerCase() === "student" ? "Student" : "Admin";
+
+  // R1: pre-fix sessions stored no token (fallback login). They are not
+  // authorized for any protected API — force a fresh legitimate login.
+  useEffect(() => {
+    if (session && !session.token) {
+      localStorage.removeItem(SESSION_KEY);
+      setSession(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // R1: expired/invalid token (401) or insufficient privilege (403) ends the
+  // session so the user must re-authenticate; other errors stay silent.
+  const handleApiError = useCallback((e) => {
+    if (e && (e.status === 401 || e.status === 403)) {
+      localStorage.removeItem(SESSION_KEY);
+      setSession(null);
+      return true;
+    }
+    return false;
+  }, []);
   const [tab, setTab] = useState("hub");
   const [students, setStudents] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
@@ -73,8 +113,8 @@ export default function App() {
   const refreshStudents = useCallback(async () => {
     try {
       setStudents(await api("/api/students"));
-    } catch { /* loading */ }
-  }, []);
+    } catch (e) { handleApiError(e); /* loading */ }
+  }, [handleApiError]);
 
   const refreshLogs = useCallback(async () => {
     try {
@@ -83,7 +123,7 @@ export default function App() {
       const r = await api(url);
       setAttendanceLogs(r.records || []);
       return;
-    } catch { /* fall through */ }
+    } catch (e) { if (handleApiError(e)) return; /* fall through */ }
     try {
       const r = await api("/api/logs?limit=50");
       setAttendanceLogs(
@@ -92,14 +132,14 @@ export default function App() {
           marked_at: e.timestamp, confidence: e.confidence,
         }))
       );
-    } catch { /* leave */ }
-  }, []);
+    } catch (e) { handleApiError(e); /* leave */ }
+  }, [handleApiError]);
 
   const refreshSessions = useCallback(async () => {
     try {
       setSessions(await api("/api/attendance/sessions?limit=20"));
-    } catch { /* legacy backend without sessions endpoint */ }
-  }, []);
+    } catch (e) { handleApiError(e); /* backend unreachable */ }
+  }, [handleApiError]);
 
   const telemetryRef = useRef(telemetry);
   telemetryRef.current = telemetry;
@@ -163,11 +203,20 @@ export default function App() {
       const v = videoRef.current;
       if (!v || !v.videoWidth) return;
       try {
+        const token = sessionToken();
         const r = await fetch(`${API}/api/detect`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify({ image: snapshot(v) }),
         });
+        if (r.status === 401 || r.status === 403) {
+          localStorage.removeItem(SESSION_KEY);
+          setSession(null);
+          return;
+        }
         const data = await r.json();
         if (data.detections) {
           setDetections(data.detections);
@@ -190,13 +239,34 @@ export default function App() {
     return () => clearInterval(id);
   }, [role, tab, refreshLogs]);
 
-  // Telemetry poll (MARP v1 -> legacy fallback)
+  // Telemetry poll (MARP v1 -> legacy fallback). R1: /status endpoints
+  // require a valid login, so the poll sends the Bearer token like api().
+  // Readiness probes stay open and need no token.
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const status = await fetch(`${API}/api/v1/marp/status`)
-          .then((r) => r.json())
-          .catch(() => fetch(`${API}/api/status`).then((r) => r.json()));
+        const token = sessionToken();
+        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+        const status = await fetch(`${API}/api/v1/marp/status`, { headers: authHeaders })
+          .then(async (r) => {
+            if (r.status === 401 || r.status === 403) {
+              localStorage.removeItem(SESSION_KEY);
+              setSession(null);
+              throw new Error("unauthorized");
+            }
+            return r.json();
+          })
+          .catch((e) => {
+            if (e?.message === "unauthorized") throw e;
+            return fetch(`${API}/api/status`, { headers: authHeaders }).then(async (r) => {
+              if (r.status === 401 || r.status === 403) {
+                localStorage.removeItem(SESSION_KEY);
+                setSession(null);
+                throw new Error("unauthorized");
+              }
+              return r.json();
+            });
+          });
         const h = await fetch(`${API}/api/v1/marp/healthz/readiness`)
           .then(async (r) => {
             let body = {};
@@ -248,8 +318,15 @@ export default function App() {
       const r = await api(endpoints[kind] || "/api/chaos/db-drop", { method: "POST" });
       setChaosMsg(`CHAOS [${kind}] -> ${r.phase}`);
       pushTerm(`BACKEND: ${r.message || r.phase}`);
-    } catch {
-      setChaosMsg("CHAOS REQUEST FAILED (BACKEND UNREACHABLE)");
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) {
+        localStorage.removeItem(SESSION_KEY);
+        setSession(null);
+        return;
+      }
+      setChaosMsg(e?.status === 403
+        ? "CHAOS DENIED — OPERATOR PRIVILEGES REQUIRED. PLEASE RE-LOGIN."
+        : "CHAOS REQUEST FAILED (BACKEND UNREACHABLE)");
       pushTerm("BACKEND UNREACHABLE — COMMAND FAILED");
     }
   };
@@ -269,7 +346,12 @@ export default function App() {
       });
       setChaosMsg(`INJECTED: ${JSON.stringify(r.chaos)}`);
       pushTerm("BACKEND: CHAOS APPLIED LIVE (NO RESTART)");
-    } catch {
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) {
+        localStorage.removeItem(SESSION_KEY);
+        setSession(null);
+        return;
+      }
       setChaosMsg("INJECT FAILED — NEEDS /api/v1 BACKEND");
       pushTerm("INJECT FAILED");
     }
@@ -471,8 +553,8 @@ export default function App() {
                   : "NO ACTIVE SESSION — START ONE BELOW"}
               </p>
               <div className="flex flex-wrap gap-2">
-                <button onClick={async () => { await api("/api/attendance/start", { method: "POST", body: JSON.stringify({ session_name: "Morning Session" }) }); refreshLogs(); }} className="brutal-btn text-xs">START SESSION</button>
-                <button onClick={async () => { await api("/api/attendance/stop", { method: "POST" }); refreshLogs(); }} className="bg-white text-black font-extrabold tracking-wider uppercase border-4 border-black px-4 py-2 text-xs hover:translate-x-1 hover:translate-y-1 transition-all">END SESSION</button>
+                <button onClick={async () => { try { await api("/api/attendance/start", { method: "POST", body: JSON.stringify({ session_name: "Morning Session" }) }); refreshLogs(); } catch (e) { if (!handleApiError(e)) pushTerm(`START FAILED: ${e.message}`); } }} className="brutal-btn text-xs">START SESSION</button>
+                <button onClick={async () => { try { await api("/api/attendance/stop", { method: "POST" }); refreshLogs(); } catch (e) { if (!handleApiError(e)) pushTerm(`STOP FAILED: ${e.message}`); } }} className="bg-white text-black font-extrabold tracking-wider uppercase border-4 border-black px-4 py-2 text-xs hover:translate-x-1 hover:translate-y-1 transition-all">END SESSION</button>
               </div>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -701,29 +783,34 @@ function LoginScreen({ onLogin }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const canonical = (v) => {
-    const raw = (v || "").trim();
-    if (raw.includes("@")) return raw.split("@")[0].trim() || raw;
-    return raw;
-  };
+  // R1: credentials are verified server-side. No client-side credential
+  // checks, no demo bypass, and no offline session is ever created.
   const doLogin = async (u, pw) => {
     setBusy(true);
+    setErr("");
     try {
       const ctx = await api("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ username: u, password: pw, role: mode.toLowerCase() }),
       });
+      if (!ctx.token) {
+        setErr("LOGIN FAILED — SERVER RETURNED NO SESSION TOKEN.");
+        return;
+      }
+      // R1: the displayed role comes from the server (ctx.role), never from
+      // the client-side mode toggle. A mismatched mode still yields a usable
+      // session, but backend 403s would block every admin call.
+      const serverRole = (ctx.role || "").toLowerCase() === "student" ? "Student" : "Admin";
       onLogin(
-        mode === "Admin"
-          ? { role: "Admin", username: ctx.username || "admin", name: ctx.name || "Class Teacher" }
-          : { role: "Student", username: u, student_id: ctx.student_id || u, name: ctx.name || u, branch: ctx.branch || "" }
+        serverRole === "Admin"
+          ? { role: "Admin", username: ctx.username || u, name: ctx.name || "Class Teacher", token: ctx.token }
+          : { role: "Student", username: ctx.student_id || u, student_id: ctx.student_id || u, name: ctx.name || u, branch: ctx.branch || "", token: ctx.token }
       );
-    } catch {
-      onLogin(
-        mode === "Admin"
-          ? { role: "Admin", username: "admin", name: "Class Teacher" }
-          : { role: "Student", username: u, student_id: u, name: u, branch: "" }
-      );
+    } catch (e) {
+      if (e?.status === 401) setErr("INVALID CREDENTIALS — CHECK USERNAME AND PASSWORD.");
+      else if (e?.status === 503) setErr("ACCOUNT NOT PROVISIONED — CONTACT YOUR ADMINISTRATOR.");
+      else if (e?.status === 422) setErr("USERNAME AND PASSWORD ARE REQUIRED.");
+      else setErr("LOGIN FAILED — BACKEND UNREACHABLE. TRY AGAIN.");
     } finally {
       setBusy(false);
     }
@@ -732,22 +819,11 @@ function LoginScreen({ onLogin }) {
     e?.preventDefault();
     setErr("");
     const u = username.trim();
-    if (mode === "Admin" && (canonical(u).toLowerCase() !== "admin" || password !== "admin123")) {
-      setErr("INVALID OPERATOR CREDENTIALS — USE THE DEMO PILL BELOW.");
-      return;
-    }
-    if (mode === "Student" && (!u || password !== "student123")) {
-      setErr("STUDENT: ANY ROLL NO. + PASSWORD student123.");
+    if (!u || !password) {
+      setErr("USERNAME AND PASSWORD ARE REQUIRED.");
       return;
     }
     await doLogin(u, password);
-  };
-  const fillDemo = async () => {
-    setMode("Admin");
-    setUsername("admin@college.edu");
-    setPassword("admin123");
-    setErr("");
-    await doLogin("admin@college.edu", "admin123");
   };
 
   return (
@@ -764,17 +840,16 @@ function LoginScreen({ onLogin }) {
           ))}
         </div>
         <form onSubmit={submit} className="space-y-3">
-          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder={mode === "Admin" ? "admin@college.edu" : "2100030001"} className="brutal-input" />
-          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="••••••••" className="brutal-input" />
+          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder={mode === "Admin" ? "operator username" : "2100030001"} className="brutal-input" autoComplete="username" />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="••••••••" className="brutal-input" autoComplete="current-password" />
           {err && <p className="rounded-none border-2 border-black bg-[#DC2626] text-white px-3 py-2 font-mono text-xs font-bold">{err}</p>}
           <button type="submit" disabled={busy} className="brutal-btn w-full disabled:opacity-50">
             {busy ? "SIGNING IN…" : `LOGIN AS ${mode.toUpperCase()}`}
           </button>
         </form>
-        <button type="button" onClick={fillDemo} disabled={busy}
-          className="w-full rounded-none border-2 border-black bg-[#E2FF00] px-2 py-2 font-mono text-[11px] font-bold uppercase text-black disabled:opacity-50">
-          ADM&nbsp;&nbsp;admin@college.edu / admin123 — TAP TO LOGIN
-        </button>
+        <p className="font-mono text-[11px] uppercase text-black/70">
+          Student accounts are provisioned by your administrator.
+        </p>
       </div>
     </div>
   );
@@ -828,6 +903,11 @@ function EnrollTab({ onDone }) {
       setShots([null, null, null, null]);
       onDone();
     } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) {
+        localStorage.removeItem(SESSION_KEY);
+        window.location.reload();
+        return;
+      }
       setMsg(e.message.toUpperCase());
     } finally {
       setBusy(false);
@@ -893,7 +973,13 @@ function StudentPortal({ lockedId }) {
     try {
       setData(await api(`/api/students/${encodeURIComponent(target)}/attendance`));
       setErr("");
-    } catch {
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) {
+        // Session expired or revoked — drop it and return to the login gate.
+        localStorage.removeItem(SESSION_KEY);
+        window.location.reload();
+        return;
+      }
       setErr("NO RECORD FOUND.");
       setData(null);
     }

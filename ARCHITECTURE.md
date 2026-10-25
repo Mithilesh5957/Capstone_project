@@ -22,12 +22,16 @@ HTTP fallback (`POST /detect`) shares `detect_and_identify` but has no ack pacin
 ## 2. MARP state machine → K8s probes
 
 ```
-UNINITIALIZED --(lifespan start_background_load)--> LOADING_WEIGHTS
-  --(MODEL_LOAD_SECONDS + chaos delay, 1s slices)--> warming_up_detector
-  --(FaceDetector.load: yolo→mediapipe→haar)--> DB_CONNECTED
-  --(Base.create_all + SELECT 1)--> READY (model_load_duration_ms, vram_allocated_mb)
-  --(any exception / simulate_vram_exhaustion / model_stall)--> FAILED / chaos phases
+UNINITIALIZED --(lifespan start_background_load, single-flight)--> LOADING_WEIGHTS
+  --(real DB check first: migrate + SELECT 1, db_failed on error)--> warming_up_detector
+  --(FaceDetector.load: yolo→mediapipe→haar, bounded by MODEL_LOAD_SECONDS budget)--> READY
+  --(detector exception → FAILED_MODEL / timeout → FAILED_TIMEOUT / stall past budget → FAILED_TIMEOUT)--> explicit recovery only (recover/reset → new single-flight attempt)
+  --(shutdown)--> SHUTDOWN (new loads refused, in-flight results discarded)
 ```
+`MODEL_LOAD_SECONDS` is an attempt-timeout bound (plus intentional chaos
+delays), never a mandatory wait: fast loads go READY immediately. Readiness
+reports `failure_kind` (`loading|db|model|timeout|shutdown`) alongside the
+legacy `phase`/`marp_state` fields.
 
 Endpoints:
 - `GET /api/v1/marp/healthz/liveness` → `{status:alive, marp_state, stage}` (process alive; K8s `initialDelay 15, period 20`).

@@ -1,6 +1,16 @@
-# FACEATTEND backend — ConfigMap (non-sensitive) + Secret (sensitive) + Deployment.
+# FACEATTEND backend — ConfigMap (non-sensitive) + Deployment.
+# Secrets are NOT stored in this repository. The Deployment references the
+# `faceattend-backend-secret` Secret, which the operator creates OUTSIDE
+# source control (see k8s/backend-secret.example.yaml). Missing Secret or
+# missing keys block pod creation; weak values fail the app's own startup
+# validation (fail-closed). This manifest always runs ENVIRONMENT=production.
 # MARP integration: K8s probes hit the MARP engine directly so no camera
 # traffic is routed before YOLOv8/MediaPipe weights are in VRAM (READY 200).
+#
+# NOTE: this manifest is still NOT a complete deployment (Phase-0 C15/C16):
+# no Postgres StatefulSet/Service, no published GHCR images, and the frontend
+# API URL strategy is unresolved. Secrets wiring below is necessary but not
+# sufficient for production readiness.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,27 +18,13 @@ metadata:
   labels:
     app: faceattend-backend
 data:
+  ENVIRONMENT: "production"
   MODEL_LOAD_SECONDS: "15"
   YOLO_WEIGHTS: "yolov8n-face.pt"
   FACE_BACKEND_ORDER: "yolo,mediapipe,haar"
   REID_THRESHOLD: "0.85"
   ADMIN_USER: "admin"
   ADMIN_EMAIL: "admin@college.edu"
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: faceattend-backend-secret
-  labels:
-    app: faceattend-backend
-type: Opaque
-stringData:
-  # Overridden at deploy time: kubectl create secret ... --from-literal=...
-  # or external-secrets. Defaults below are DEV ONLY.
-  JWT_SECRET: "faceattend-dev-secret-change-in-prod-32chars!"
-  DATABASE_URL: "postgresql://analytics:analytics@postgres:5432/analytics"
-  ADMIN_PASSWORD: "admin123"
-  POSTGRES_PASSWORD: "analytics"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -59,6 +55,13 @@ spec:
             - name: http
               containerPort: 8000
           env:
+            # Explicit production mode (required: the app refuses to boot
+            # without ENVIRONMENT; unknown/blank values fail clearly).
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-backend-config
+                  key: ENVIRONMENT
             - name: MODEL_LOAD_SECONDS
               valueFrom:
                 configMapKeyRef:

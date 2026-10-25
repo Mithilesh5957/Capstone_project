@@ -2,7 +2,6 @@
 
 Secrets are env-driven with a secure dev fallback. Production MUST set JWT_SECRET.
 """
-import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -10,12 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-from .config import JWT_ALG, JWT_TTL_S
-
-JWT_SECRET = os.getenv("JWT_SECRET", "faceattend-dev-secret-change-in-prod-32chars!")
-if len(JWT_SECRET) < 32:
-    # Enforce minimum entropy even for the fallback; pad deterministically.
-    JWT_SECRET = (JWT_SECRET + "-faceattend-pad-32chars-minimum").ljust(32, "0")
+from .config import JWT_ALG, JWT_SECRET, JWT_TTL_S
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -84,3 +78,21 @@ def require_admin(user: dict = Depends(get_current_user)):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="operator privileges required")
     return user
+
+
+# Authenticated (any role) — for endpoints that need a valid login but no
+# operator privilege. Distinct name so route policies read explicitly.
+require_authenticated = get_current_user
+
+
+def enforce_self_or_admin(target_student_id: str, user: dict) -> dict:
+    """Least-privilege rule for per-student records.
+
+    Admins may view any student; students may view only their own record
+    (``sub`` of a student JWT is the student_id).
+    """
+    if user.get("role") == "admin":
+        return user
+    if user.get("role") == "student" and user.get("sub") == (target_student_id or "").strip():
+        return user
+    raise HTTPException(status_code=403, detail="access limited to own record")

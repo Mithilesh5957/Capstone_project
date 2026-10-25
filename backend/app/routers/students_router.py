@@ -2,7 +2,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from ..core.database import SessionLocal
-from ..core.security import require_admin
+from ..core.security import enforce_self_or_admin, get_current_user, require_admin
 from ..models.student import Student
 from ..schemas.student import EnrollIn
 from ..services import face_detection as fd
@@ -12,8 +12,10 @@ from ..services import marp_engine as marp
 router = APIRouter(prefix="/api/v1/students", tags=["students"])
 
 
-@router.post("/enroll")
-def enroll(body: EnrollIn, _admin: dict = Depends(require_admin)):
+def enroll_impl(body: EnrollIn):
+    """Shared enrollment logic. Callers must enforce require_admin at their
+    own route boundary (FastAPI does NOT run Depends of a handler that is
+    invoked as a plain function)."""
     if not marp.state["model_ready"]:
         return JSONResponse({"error": "model loading", "phase": marp.state["phase"]},
                             status_code=503)
@@ -53,8 +55,8 @@ def enroll(body: EnrollIn, _admin: dict = Depends(require_admin)):
         s.close()
 
 
-@router.get("")
-def list_students():
+def list_students_impl():
+    """Shared student-list logic. Callers must enforce auth at their boundary."""
     s = SessionLocal()
     try:
         rows = s.query(Student).order_by(Student.student_id).all()
@@ -65,8 +67,9 @@ def list_students():
         s.close()
 
 
-@router.get("/{student_id}/attendance")
-def student_attendance(student_id: str):
+def student_attendance_impl(student_id: str):
+    """Shared per-student attendance logic. Callers must enforce
+    enforce_self_or_admin at their boundary."""
     from ..models.attendance import AttendanceRecord, AttendanceSession
     s = SessionLocal()
     try:
@@ -88,3 +91,19 @@ def student_attendance(student_id: str):
                             for r, sess in recs]}
     finally:
         s.close()
+
+
+@router.post("/enroll")
+def enroll(body: EnrollIn, _admin: dict = Depends(require_admin)):
+    return enroll_impl(body)
+
+
+@router.get("")
+def list_students(_admin: dict = Depends(require_admin)):
+    return list_students_impl()
+
+
+@router.get("/{student_id}/attendance")
+def student_attendance(student_id: str, user: dict = Depends(get_current_user)):
+    enforce_self_or_admin(student_id, user)
+    return student_attendance_impl(student_id)

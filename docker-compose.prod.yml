@@ -1,0 +1,30 @@
+# FACEATTEND production override — fail-closed secrets, explicit prod mode.
+#
+# Usage (from the repository root):
+#   export JWT_SECRET="$(openssl rand -hex 32)"
+#   export ADMIN_PASSWORD='<strong password, at least 12 chars>'
+#   export POSTGRES_PASSWORD='<strong database password>'
+#   export DATABASE_URL="postgresql://analytics:${POSTGRES_PASSWORD}@db:5432/analytics"
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Contract:
+# - ENVIRONMENT=production is set literally below (explicit, not interpolated).
+# - JWT_SECRET, ADMIN_PASSWORD, POSTGRES_PASSWORD, DATABASE_URL are REQUIRED:
+#   if any is missing or empty, `docker compose config` / `up` aborts BEFORE
+#   any container starts. No development defaults are inherited.
+# - The application additionally refuses to boot if the supplied values are
+#   short or documented dev defaults (see backend/app/core/config.py).
+# Validate without starting anything:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+services:
+  backend:
+    environment:
+      # Explicit production selection (overrides the development default).
+      ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL, e.g. postgresql://analytics:<pw>@db:5432/analytics}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a strong random value of at least 32 chars}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD to a strong value of at least 12 chars}
+
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a strong database password}

@@ -23,6 +23,27 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Validate production compose override (fail-closed, redacted)
+        run: |
+          # 1. Missing required secrets must abort config rendering.
+          if docker compose -f docker-compose.yml -f docker-compose.prod.yml config >/dev/null 2>&1; then
+            echo "prod override rendered WITHOUT required secrets (expected failure)"; exit 1
+          fi
+          echo "missing-secrets correctly rejected"
+          # 2. With synthetic placeholder secrets, rendering must select
+          #    production mode and contain no documented dev defaults.
+          #    NOTE: values below are synthetic test-only placeholders, and
+          #    only grep COUNTS are printed — never rendered configuration.
+          export JWT_SECRET="synthetic-test-only-0123456789abcdef"
+          export ADMIN_PASSWORD="synthetic-test-only-pw"
+          export POSTGRES_PASSWORD="synthetic-test-only-db"
+          export DATABASE_URL="postgresql://analytics:synthetic-test-only-db@db:5432/analytics"
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config > /tmp/prod-config.yml
+          grep -q 'ENVIRONMENT: production' /tmp/prod-config.yml
+          test "$(grep -c 'default_dev_secret_change_me\|admin123' /tmp/prod-config.yml || true)" = "0"
+          echo "prod override renders production mode without dev defaults"
+          rm -f /tmp/prod-config.yml
+
       - name: Build the docker-compose stack
         run: docker compose build
 

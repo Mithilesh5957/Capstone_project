@@ -174,5 +174,5 @@ def process_live_frame(image_b64: str) -> dict:
     return {
         "detections": dets,
         "newly_marked": newly_marked,
-        "active_session": dict(marp.active_session),
+        "active_session": marp.session_snapshot(),
     }

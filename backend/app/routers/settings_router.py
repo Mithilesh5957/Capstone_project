@@ -1,13 +1,13 @@
 """Detection parameter tuning (/api/v1/settings)."""
 from fastapi import APIRouter, Depends
 from ..core import config
-from ..core.security import require_admin
+from ..core.security import get_current_user, require_admin
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 
 
 @router.get("/detection")
-def get_detection():
+def get_detection(_user: dict = Depends(get_current_user)):
     return {"frame": {"w": config.FRAME_W, "h": config.FRAME_H},
             "scale_factor": config.DET_SCALE_FACTOR,
             "min_neighbors": config.DET_MIN_NEIGHBORS,

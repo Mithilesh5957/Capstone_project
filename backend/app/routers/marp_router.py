@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
 from ..core.database import SessionLocal, engine
-from ..core.security import require_admin
+from ..core.security import get_current_user, require_admin
 from ..schemas.marp import ChaosConfig, ChaosIn, ChaosTune
 from ..services import marp_engine as marp
 
@@ -35,7 +35,7 @@ def readiness():
 
 
 @router.get("/status")
-def status():
+def status(_user: dict = Depends(get_current_user)):
     try:
         with engine.connect() as c:
             c.execute(text("SELECT 1"))
@@ -45,7 +45,7 @@ def status():
     return {"phase": marp.state["phase"], "marp_state": marp.marp_state(),
             "model_ready": marp.state["model_ready"], "db_connected": db_ok,
             "uptime_s": round(time.time() - marp.START_TIME, 1),
-            "active_session": dict(marp.active_session),
+            "active_session": marp.session_snapshot(),
             "chaos": dict(marp.chaos_knobs),
             "metrics": marp.ENGINE.metrics(),
             "simulated_db_failure": marp.SIMULATED_DB_FAILURE,
@@ -62,7 +62,7 @@ def chaos_inject(cfg: ChaosConfig, _admin: dict = Depends(require_admin)):
 
 
 @router.get("/chaos/status")
-def chaos_status():
+def chaos_status(_user: dict = Depends(get_current_user)):
     return {"chaos": marp.ENGINE.chaos_snapshot(),
             "marp_state": marp.marp_state(), "stage": marp.ENGINE.stage,
             "metrics": marp.ENGINE.metrics(),
@@ -79,10 +79,10 @@ def chaos_reset(_admin: dict = Depends(require_admin)):
 
 
 # ---- legacy compat (kept for old UI + fault_injection tests) ----
-# NOTE: legacy chaos endpoints remain unauthenticated for DevOps harness
-# compatibility; new /chaos/inject|reset|tune paths above require JWT admin.
+# R1: all chaos endpoints require operator auth, including this legacy alias.
+# DevOps harness must supply an admin Bearer token (see .env.example).
 @router.post("/chaos")
-def chaos(c: ChaosIn):
+def chaos(c: ChaosIn, _admin: dict = Depends(require_admin)):
     return marp.inject(c.failure)
 
 
@@ -115,7 +115,7 @@ def recover(_admin: dict = Depends(require_admin)):
     marp.SIMULATED_DB_FAILURE = False
     marp.SIMULATED_MODEL_FAILURE = False
     marp.state["phase"] = "reloading"
-    marp.start_background_load()
+    marp.start_background_load("recovery")
     return {"ok": True, "marp_state": marp.marp_state(), "phase": marp.state["phase"],
             "message": "Recovering; readiness 200 once reload completes"}
 

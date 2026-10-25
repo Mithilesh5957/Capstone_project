@@ -20,6 +20,11 @@ npm-debug.log*
 pgdata/
 *.log
 
+# Local populated K8s secrets (never commit real credentials).
+# Example placeholders (k8s/*.example.yaml) remain tracked.
+k8s/*-secret.yaml
+!k8s/*.example.yaml
+
 # OS / IDE
 .DS_Store
 .vscode/

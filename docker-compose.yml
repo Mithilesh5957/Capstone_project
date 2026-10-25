@@ -1,7 +1,8 @@
-# FACEATTEND production compose — pre-built images, env-driven secrets.
-# Production: `docker compose up -d --build` (no source mounts).
-# Development (live reload): `docker compose --profile development up -d --build`
-#   uses `backend-dev` below, which mounts ./backend:/app.
+# FACEATTEND compose — DEVELOPMENT defaults (explicit ENVIRONMENT=development).
+# Every default below is LOCAL ONLY and must never be mistaken for production
+# secrets. Production: add `-f docker-compose.prod.yml`, which selects
+# ENVIRONMENT=production and REQUIRES externally supplied secrets
+# (missing values abort before any container starts). See README + .env.example.
 services:
   db:
     image: postgres:15-alpine
@@ -25,8 +26,11 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
+      # Explicit dev selection: the app refuses to boot without ENVIRONMENT.
+      ENVIRONMENT: development
       DATABASE_URL: ${DATABASE_URL:-postgresql://analytics:analytics@db:5432/analytics}
       MODEL_LOAD_SECONDS: ${MODEL_LOAD_SECONDS:-15}
+      # LOCAL-ONLY dev defaults (overridden as no-ops by docker-compose.prod.yml).
       JWT_SECRET: ${JWT_SECRET:-default_dev_secret_change_me}
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@college.edu}
@@ -54,8 +58,11 @@ services:
     volumes:
       - ./backend:/app
     environment:
+      # Explicit dev selection (live-reload service is never used in prod).
+      ENVIRONMENT: development
       DATABASE_URL: ${DATABASE_URL:-postgresql://analytics:analytics@db:5432/analytics}
       MODEL_LOAD_SECONDS: ${MODEL_LOAD_SECONDS:-5}
+      # LOCAL-ONLY dev defaults.
       JWT_SECRET: ${JWT_SECRET:-default_dev_secret_change_me}
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@college.edu}
