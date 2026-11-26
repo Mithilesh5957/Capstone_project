@@ -49,7 +49,10 @@ spec:
     spec:
       containers:
         - name: faceattend-backend
-          image: ghcr.io/faceattend/backend:latest # pre-warmed YOLOv8 image from CI
+          # Exact image pinned per release in kustomization.yaml (images:).
+          # Base reference below is the verified owner namespace; tags must
+          # point at pushed, verified builds — never an unpushed local tag.
+          image: ghcr.io/mithilesh5957/capstone_project-backend:main
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -111,6 +114,17 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 3
+          # Startup = permits slow first boot (model-weight download can take
+          # minutes). Liveness only starts counting after this succeeds, so a
+          # cold pod is never restart-looped for loading slowly. 10s x 36 =
+          # ~6 min budget, then normal liveness/readiness take over.
+          startupProbe:
+            httpGet:
+              path: /api/v1/marp/healthz/liveness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 36
           # Readiness = MARP READY (weights in VRAM + DB verified).
           # Returns 503 while UNINITIALIZED/LOADING_WEIGHTS (~24s for
           # MediaPipe/YOLOv8 warmup), 200 only at READY — K8s holds

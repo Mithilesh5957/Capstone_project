@@ -1,0 +1,88 @@
+# FACEATTEND PostgreSQL — single-replica StatefulSet + storage + Service.
+#
+# Design notes (read before changing):
+# - No initdb scripts are mounted on purpose: the backend self-initializes an
+#   empty database idempotently on first boot (schema.sql equivalent via
+#   create_all, cross-process serialized by a PostgreSQL advisory lock —
+#   see ARCHITECTURE.md). The StatefulSet therefore only provides a durable
+#   empty data directory.
+# - Single replica: the app has no multi-writer PostgreSQL story (no
+#   Patroni/Stolon). Do not scale this to N>1 without one.
+# - storageClassName is intentionally unset: the cluster default provisioner
+#   supplies the volume. Pin one explicitly for reproducible environments.
+# - Never expose this Service publicly; app pods reach it as `postgres:5432`
+#   inside the namespace (matches the DATABASE_URL in
+#   k8s/backend-secret.example.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: faceattend
+spec:
+  # Headless: stable per-pod DNS for the StatefulSet (required field).
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      protocol: TCP
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: faceattend
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        app.kubernetes.io/part-of: faceattend
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: analytics
+            - name: POSTGRES_DB
+              value: analytics
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: faceattend-backend-secret
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 256Mi
+            limits:
+              cpu: "1000m"
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # storageClassName: <pin explicitly for reproducible environments>
+        resources:
+          requests:
+            storage: 10Gi

@@ -47,6 +47,11 @@ jobs:
       - name: Build the docker-compose stack
         run: docker compose build
 
+      - name: CV import smoke test (pinned stack, no DB needed)
+        # Catches exactly the R7 failure class: pip resolves fine but the
+        # installed NumPy/OpenCV ABI combination fails at import time.
+        run: docker compose run --rm --no-deps -e ENVIRONMENT=test backend python -c "import cv2, numpy, app.services.face_detection, app.services.face_recognition; print('cv2', cv2.__version__, '| numpy', numpy.__version__)"
+
       - name: Start stack in background
         run: docker compose up -d
         env:

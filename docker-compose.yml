@@ -78,11 +78,22 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api/v1}
         REACT_APP_API_URL: ${REACT_APP_API_URL:-http://localhost:8000}
+        # Optional white-label branding (login screen). Empty default keeps
+        # the built-in fallback; set REACT_APP_ORG_NAME in .env to rebrand.
+        REACT_APP_ORG_NAME: ${REACT_APP_ORG_NAME:-}
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      # Web-server liveness only (nginx answers even if the API is down —
+      # use the backend MARP readiness endpoint for application readiness).
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   pgdata:

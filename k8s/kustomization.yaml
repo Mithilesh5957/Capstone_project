@@ -1,0 +1,45 @@
+# FACEATTEND kustomization — single entry point for cluster deployment.
+#
+# Usage (local demo only; never against a remote cluster without approval):
+#   kubectl create secret generic faceattend-backend-secret \
+#     --from-literal=JWT_SECRET="$(openssl rand -hex 32)" \
+#     --from-literal=DATABASE_URL="postgresql://analytics:<pw>@postgres:5432/analytics" \
+#     --from-literal=ADMIN_PASSWORD='<strong password, >= 12 chars>' \
+#     --from-literal=POSTGRES_PASSWORD='<strong db password>' \
+#     -n faceattend
+#   kubectl apply -k k8s/
+#
+# Image pinning: replace the `newTag` values below with the exact published
+# tags for each release (e.g. a commit SHA or version). `latest`/branch tags
+# must never be the only reference for anything beyond a disposable demo.
+# If the registry is private, add an imagePullSecret (pattern only — no
+# credentials are committed anywhere in this repository):
+#   kubectl create secret docker-registry ghcr-pull \
+#     --docker-server=ghcr.io --docker-username=<USER> \
+#     --docker-password=<TOKEN> -n faceattend
+# and reference it via `patches:` on the Deployments (left to the operator:
+# uncommenting example below is intentionally NOT pre-wired).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: faceattend
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - services.yaml
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+  # backend-secret.example.yaml is documentation, NOT applied (placeholders
+  # would fail startup validation; the real Secret is created out of band).
+
+images:
+  - name: ghcr.io/mithilesh5957/capstone_project-backend
+    newTag: main
+  - name: ghcr.io/mithilesh5957/capstone_project-frontend
+    newTag: main
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: faceattend
+      app.kubernetes.io/managed-by: kustomize

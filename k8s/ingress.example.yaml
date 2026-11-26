@@ -1,0 +1,45 @@
+# FACEATTEND Ingress — EXAMPLE ONLY (placeholders, safe to commit).
+#
+# Optional: exposes the demo outside the cluster. Requires an Ingress
+# controller (e.g. ingress-nginx, or `minikube addons enable ingress`) —
+# without one this resource is inert but harmless. Not referenced by
+# kustomization.yaml; apply explicitly after editing the host:
+#
+#   kubectl apply -f k8s/ingress.example.yaml   # AFTER replacing the host
+#
+# Routing contract (matches the frontend build-arg strategy documented in
+# frontend-deployment.yaml):
+# - "/"            → faceattend-frontend:80   (static bundle)
+# - "/api(/|$)(.*)" → faceattend-backend:8000 (same-origin API; browsers never
+#   need the cluster-internal service hostname)
+# Build the frontend image per environment so the baked API base equals
+# "https://<your-host>" (see frontend-deployment.yaml header). TLS is
+# intentionally left to the operator (cert-manager or manual secret).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: faceattend
+  labels:
+    app.kubernetes.io/part-of: faceattend
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: faceattend.example.com # REPLACE with the real demo host
+      http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: faceattend-backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: faceattend-frontend
+                port:
+                  number: 80
