@@ -25,13 +25,24 @@ HTTP fallback (`POST /detect`) shares `detect_and_identify` but has no ack pacin
 UNINITIALIZED --(lifespan start_background_load, single-flight)--> LOADING_WEIGHTS
   --(real DB check first: migrate + SELECT 1, db_failed on error)--> warming_up_detector
   --(FaceDetector.load: yolo→mediapipe→haar, bounded by MODEL_LOAD_SECONDS budget)--> READY
-  --(detector exception → FAILED_MODEL / timeout → FAILED_TIMEOUT / stall past budget → FAILED_TIMEOUT)--> explicit recovery only (recover/reset → new single-flight attempt)
+  --(detector exception → FAILED_MODEL / timeout → FAILED_TIMEOUT / stall past budget → FAILED_TIMEOUT / hung predecessor load → FAILED_BUSY)--> explicit recovery only (recover/reset → new single-flight attempt)
   --(shutdown)--> SHUTDOWN (new loads refused, in-flight results discarded)
 ```
 `MODEL_LOAD_SECONDS` is an attempt-timeout bound (plus intentional chaos
 delays), never a mandatory wait: fast loads go READY immediately. Readiness
-reports `failure_kind` (`loading|db|model|timeout|shutdown`) alongside the
-legacy `phase`/`marp_state` fields.
+reports `failure_kind` (`loading|db|model|timeout|busy|shutdown`) alongside the
+legacy `phase`/`marp_state` fields. At most one detector load runs per process;
+a new load while one is hung fails fast with `FAILED_BUSY` (restart clears it).
+
+**Schema init concurrency.** Fresh databases self-initialize from two sources:
+`database/schema.sql` (applied by the `db` entrypoint on first boot) and
+idempotent `Base.metadata.create_all` owned by `marp_engine._ensure_schema`.
+Concurrent first-touch initializers (separate app instances, or a test fixture
+racing a MARP telemetry thread) serialize on a transaction-scoped PostgreSQL
+advisory lock (`pg_advisory_xact_lock`, same transaction as the DDL, gated to
+the `postgresql` dialect), so the loser waits and then no-ops. Only
+duplicate-object races (`already exists`) are absorbed; genuine DDL failures
+still propagate.
 
 Endpoints:
 - `GET /api/v1/marp/healthz/liveness` → `{status:alive, marp_state, stage}` (process alive; K8s `initialDelay 15, period 20`).

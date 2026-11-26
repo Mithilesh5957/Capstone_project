@@ -1,0 +1,90 @@
+% FACEATTEND / MARP research paper references (D3, verified November 2026).
+%
+% Verification method: every DOI was resolved through doi.org (HTTP 200
+% redirect chains) and every record was cross-checked against OpenAlex
+% metadata (publication year, venue, author list, title). Sculley et al.
+% (NeurIPS) carries no DOI by venue convention. The Basiri et al. author
+% list was corrected against the publisher record (seven authors; no
+% Wohlin; Kosewski, not Kosewicz). The Deng entry cites the CVPR 2019
+% conference paper (four authors), not the later journal extension.
+% Entries are sorted alphabetically by citation key, matching the
+% plainnat bibliography ordering used in the manuscript.
+
+@inproceedings{Amershi,
+  author    = {Saleema Amershi and Andrew Begel and Christian Bird and
+               Robert DeLine and Harald Gall and Ece Kamar and
+               Nachiappan Nagappan and Besma Nushi and Thomas Zimmermann},
+  title     = {Software Engineering for Machine Learning: A Case Study},
+  booktitle = {Proceedings of the 41st International Conference on Software
+               Engineering: Software Engineering in Practice (ICSE-SEIP)},
+  pages     = {291--300},
+  year      = {2019},
+  doi       = {10.1109/ICSE-SEIP.2019.00042},
+}
+
+@article{Basiri,
+  author  = {Ali Basiri and Niosha Behnam and Roel de Rooij and
+             Lorin Hochstein and Luke Kosewski and Justin Reynolds and
+             Casey Rosenthal},
+  title   = {Chaos Engineering},
+  journal = {IEEE Software},
+  volume  = {33},
+  number  = {3},
+  pages   = {35--41},
+  year    = {2016},
+  doi     = {10.1109/MS.2016.60},
+}
+
+@inproceedings{Breck,
+  author    = {Eric Breck and Shanqing Cai and Eric Nielsen and
+               Michael Salib and D. Sculley},
+  title     = {The {ML} Test Score: A Rubric for {ML} Production Readiness
+               and Technical Debt Reduction},
+  booktitle = {Proceedings of the 2017 IEEE International Conference on
+               Big Data (BigData)},
+  pages     = {1123--1132},
+  year      = {2017},
+  doi       = {10.1109/BigData.2017.8258038},
+}
+
+@inproceedings{Deng,
+  author    = {Jiankang Deng and Jia Guo and Niannan Xue and
+               Stefanos Zafeiriou},
+  title     = {{ArcFace}: Additive Angular Margin Loss for Deep Face
+               Recognition},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision
+               and Pattern Recognition (CVPR)},
+  pages     = {4690--4699},
+  year      = {2019},
+  doi       = {10.1109/CVPR.2019.00482},
+}
+
+@misc{Kubernetes,
+  author       = {{Kubernetes}},
+  title        = {Configure Liveness, Readiness and Startup Probes},
+  howpublished = {Kubernetes Documentation},
+  note         = {Available at \url{https://kubernetes.io/docs/concepts/configuration/liveness-readiness-startup-probes/}, verified reachable November 2026},
+}
+
+@inproceedings{Schroff,
+  author    = {Florian Schroff and Dmitry Kalenichenko and James Philbin},
+  title     = {{FaceNet}: A Unified Embedding for Face Recognition and
+               Clustering},
+  booktitle = {Proceedings of the IEEE Conference on Computer Vision and
+               Pattern Recognition (CVPR)},
+  pages     = {815--823},
+  year      = {2015},
+  doi       = {10.1109/CVPR.2015.7298682},
+}
+
+@inproceedings{Sculley,
+  author    = {D. Sculley and Gary Holt and Daniel Golovin and
+               Eugene Davydov and Todd Phillips and Dietmar Ebner and
+               Vinay Chaudhary and Michael Young and Jean-Francois Crespo
+               and Dan Dennison},
+  title     = {Hidden Technical Debt in Machine Learning Systems},
+  booktitle = {Advances in Neural Information Processing Systems 28
+               (NeurIPS 2015)},
+  pages     = {2503--2511},
+  year      = {2015},
+}
