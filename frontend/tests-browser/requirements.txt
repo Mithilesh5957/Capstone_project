@@ -1,0 +1,12 @@
+# R7: pinned browser-test toolchain (matches the validated R6 runs).
+# Install inside the pinned Playwright image, which already bundles the
+# matching browser binaries (chromium-1148 / firefox-1466 / webkit-2104):
+#   mcr.microsoft.com/playwright/python:v1.49.0-jammy
+# Do NOT upgrade playwright independently of the image: the pip package must
+# match the bundled browser builds, or launches fail.
+playwright==1.49.1
+pytest==9.1.1
+pytest-playwright==0.10.0
+requests==2.34.2
+psycopg[binary]==3.3.6
+axe-core-python==0.1.0
