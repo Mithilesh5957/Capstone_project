@@ -185,6 +185,24 @@ def test_enroll_rejects_faceless_image_422(clean_db, marp_state):
     assert "no usable face" in ei.value.detail
 
 
+def test_enroll_rejects_uniform_nonzero_image_422(clean_db, marp_state):
+    # Regression: a uniform mid-gray frame has non-zero norm, so the raw
+    # embedding path yields a "valid" vector. Enrollment must still refuse it
+    # because the detector fires on nothing (verified live 2026-11-26: a
+    # uniform frame previously enrolled HTTP 200 before the face-required
+    # check in enroll_impl).
+    from fastapi import HTTPException
+
+    marp.state["model_ready"] = True
+    gray = np.full((480, 640, 3), 128, dtype=np.uint8)
+    with pytest.raises(HTTPException) as ei:
+        from app.routers.students_router import enroll_impl
+        enroll_impl(EnrollIn(student_id="S1", name="N",
+                             images=[_b64_jpeg(gray)]))
+    assert ei.value.status_code == 422
+    assert "no usable face" in ei.value.detail
+
+
 # ---------- attendance safety (isolated PG) ----------
 
 def _seed_student(s, sid="S1", emb=None):

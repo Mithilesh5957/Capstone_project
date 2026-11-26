@@ -30,7 +30,10 @@ def enroll_impl(body: EnrollIn):
         except HTTPException:
             raise HTTPException(status_code=422, detail=f"image[{i}] invalid base64")
         v = fr.embedding_from_bytes(raw)
-        if v is None:
+        # An embedding alone is not proof of a face: the extractor falls back
+        # to a whole-frame template when nothing is detected. Enrollment must
+        # only accept images the detector actually fires on.
+        if v is None or not fd.detect_faces_jpeg(raw):
             raise HTTPException(status_code=422, detail=f"image[{i}] has no usable face")
         vecs.append(np.array(v, dtype=np.float32))
     mean_vec = sum(vecs) / len(vecs)

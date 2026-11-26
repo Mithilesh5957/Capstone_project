@@ -455,6 +455,11 @@ def test_authorized_session_lifecycle(client, db, hasher, monkeypatch):
                         lambda b64: np.zeros((480, 640, 3), dtype=np.uint8))
     monkeypatch.setattr(fr_mod, "embedding_from_bytes",
                         lambda raw: [0.1] * 4096)
+    # enroll_impl additionally requires a detected face; stub the detector
+    # check the same way (the 422 face rule itself is covered with real
+    # images by test_r9_matching + live acceptance, not here).
+    monkeypatch.setattr(fd_mod, "detect_faces_jpeg",
+                        lambda raw: [{"bbox": [10, 10, 100, 100]}])
     h = _admin_headers(client)
     fake_img = "dGVzdA=="  # base64("test"); CV is stubbed above
     # Enroll via v1 AND legacy with admin token.
