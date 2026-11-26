@@ -1,9 +1,35 @@
 """CPU embedding + nearest-neighbour ReID (dependency-free, deterministic)."""
+import math
+
 import cv2
 import numpy as np
 from ..core import config
 from . import face_detection as fd
 from . import marp_engine as marp
+
+# Canonical template dimensionality (64x64 grayscale, L2-normalized).
+EMBEDDING_DIM = 64 * 64
+
+
+def is_valid_vector(v, dim: int = EMBEDDING_DIM) -> bool:
+    """True iff v is a finite real vector of length dim.
+
+    Guards the matcher against None, empty/malformed containers, wrong
+    lengths, NaN/inf entries, and non-numeric content. Anything failing this
+    check must never count as an identity match (fail closed).
+    """
+    if v is None or isinstance(v, (str, bytes)):
+        return False
+    try:
+        arr = np.asarray(v, dtype=np.float32)
+    except (ValueError, TypeError):
+        return False
+    if arr.shape != (dim,):
+        return False
+    try:
+        return bool(np.all(np.isfinite(arr)))
+    except TypeError:
+        return False
 
 
 def embedding_from_bgr(img: np.ndarray):
@@ -27,7 +53,9 @@ def embedding_from_bgr(img: np.ndarray):
     chip = cv2.equalizeHist(chip)
     vec = chip.astype(np.float32).ravel() / 255.0
     n = float(np.linalg.norm(vec))
-    if n < 1e-6:
+    # Zero-norm (blank) or non-finite norms yield no template; a None return
+    # propagates as "no usable template" (422 at enroll, Unknown at detect).
+    if not math.isfinite(n) or n < 1e-6:
         return None
     return (vec / n).tolist()
 
@@ -55,18 +83,26 @@ def embedding_for_bbox(jpeg_bytes: bytes, bbox):
 
 
 def euclidean(a, b) -> float:
+    # Fail closed: anything invalid (None, malformed, wrong length,
+    # NaN/inf) yields +inf, which can never satisfy the <= threshold rule.
+    if not is_valid_vector(a) or not is_valid_vector(b):
+        return float("inf")
     try:
-        return float(np.linalg.norm(
+        d = float(np.linalg.norm(
             np.array(a, dtype=np.float32) - np.array(b, dtype=np.float32)))
     except Exception:
         return float("inf")
+    return d if math.isfinite(d) else float("inf")
 
 
 def match_student(face_vec, students_rows):
+    # An invalid probe vector matches nothing (explicit, not accidental).
+    if not is_valid_vector(face_vec):
+        return None, None
     best, best_d = None, float("inf")
     for s in students_rows:
         emb = s.embeddings or []
-        if not emb:
+        if not is_valid_vector(emb):
             continue
         d = euclidean(face_vec, emb)
         if d < best_d:

@@ -1,10 +1,10 @@
 """MARP state machine + in-situ chaos injector (singleton MARPEngine).
 
-Lifecycle contract (R2):
-  UNINITIALIZED -> LOADING_WEIGHTS -> READY
-                          |            ^   (explicit recover/reset only)
+Lifecycle contract (R2, verified gate):
+  UNINITIALIZED → LOADING_WEIGHTS → READY | FAILED_{db,model,timeout,busy}
+                          ^            |   (explicit recover/reset only)
                           v            |
-               FAILED_{db,model,timeout}   SHUTDOWN (terminal, process exiting)
+               FAILED_{db,model,timeout,busy}   SHUTDOWN (terminal, process exiting)
 
 - Single-flight: at most one loader thread per engine; concurrent callers
   attach to the active generation. Stale generations never commit results.
@@ -48,6 +48,33 @@ _load_lock = threading.Lock()
 _load_generation: int = 0
 _load_thread: "threading.Thread | None" = None
 _shutdown_event = threading.Event()
+
+
+class _DetectorBusyError(Exception):
+    """A previous detector load is still active.
+
+    Detector loading is blocking and non-cancellable in-process: timing out a
+    wait does NOT terminate the underlying operation. Starting another load
+    on top would silently accumulate abandoned workers, so a new attempt is
+    refused fast with an explicit FAILED_BUSY state instead. Recovery path:
+    wait for the hung operation to finish (transient stall), or restart the
+    process (permanently hung detector).
+    """
+
+
+# At most one live inner detector-loading operation per process. The slot
+# holds the thread object while it runs and is cleared by the thread itself
+# on completion, so a still-blocked predecessor is observable (not silently
+# piled onto). Guarded by _detector_lock; never held across blocking waits.
+_detector_lock = threading.Lock()
+_detector_slot: Dict[str, Any] = {"thread": None}
+
+
+def detector_inflight() -> int:
+    """Number of live inner detector-loading operations (0 or 1 by design)."""
+    with _detector_lock:
+        t = _detector_slot["thread"]
+        return 1 if (t is not None and t.is_alive()) else 0
 
 
 def _current_generation() -> int:
@@ -268,12 +295,15 @@ ENGINE = MARPEngine()
 
 def marp_state() -> str:
     ph = state.get("phase", "")
-    # Distinct terminal states (R2): DB vs model vs timeout stay separable.
-    # Phase prefixes are stable API; only this derived label gained variants.
+    # Distinct terminal states (R2): DB vs model vs timeout vs busy detector
+    # stay separable. Phase prefixes are stable API; only this derived label
+    # gained variants.
     if ph.startswith("db_failed"):
         return "FAILED_DB"
     if ph.startswith("timeout"):
         return "FAILED_TIMEOUT"
+    if ph.startswith("detector_busy"):
+        return "FAILED_BUSY"
     if ph.startswith("detector_failed"):
         return "FAILED_MODEL"
     if ph == "shutdown":
@@ -338,6 +368,11 @@ def _load_detector(budget_s: float, generation: int):
     itself runs in an inner daemon thread so an overrun cannot block the
     worker: on timeout the worker records FAILED_TIMEOUT and returns, and a
     late-finishing inner thread commits nothing (see generation checks).
+
+    Raises _DetectorBusyError without starting any work if a previous inner
+    detector operation is still alive: the underlying call is non-cancellable,
+    so piling another load on top would leak workers unboundedly. At most one
+    inner detector operation exists per process (see detector_inflight()).
     """
     from .face_detection import detector as _det
     result: Dict[str, Any] = {}
@@ -356,9 +391,23 @@ def _load_detector(budget_s: float, generation: int):
         except Exception as e:  # noqa: BLE001 - surfaced as FAILED_MODEL
             result["error"] = str(e)
         finally:
+            with _detector_lock:
+                if _detector_slot["thread"] is threading.current_thread():
+                    _detector_slot["thread"] = None
             done.set()
 
-    threading.Thread(target=_run, daemon=True).start()
+    inner = threading.Thread(target=_run, daemon=True)
+    with _detector_lock:
+        current = _detector_slot["thread"]
+        if current is not None and current.is_alive():
+            raise _DetectorBusyError(
+                "previous detector load still active; wait for it or "
+                "restart the process to clear a hung detector")
+        _detector_slot["thread"] = inner
+        # Start while holding the lock: closes the claim-vs-start race so two
+        # callers can never both believe they own the slot. start() does not
+        # block, so no lock is held across a wait.
+        inner.start()
     deadline = time.time() + max(0.5, budget_s)
     while time.time() < deadline:
         if _is_stale(generation):
@@ -444,7 +493,13 @@ def _load_worker(generation: int, reason: str) -> None:
     with ENGINE._state_lock:
         state["phase"] = "warming_up_detector"
     elapsed = time.time() - t0
-    backend, error, timed_out = _load_detector(_load_budget_s() - elapsed, generation)
+    try:
+        backend, error, timed_out = _load_detector(
+            _load_budget_s() - elapsed, generation)
+    except _DetectorBusyError as e:
+        _commit_if_current(
+            generation, "failed", str(e), f"detector_busy: {e}", "busy")
+        return
     if timed_out:
         _commit_if_current(
             generation, "failed",
@@ -509,8 +564,16 @@ def start_background_load(reason: str = "boot") -> int:
 
 def note_shutdown(timeout_s: float = 5.0) -> None:
     """Application shutdown: stop accepting load work, invalidate in-flight
-    attempts, and best-effort join the loader so no uncontrolled new recovery
-    work is left behind. Daemon threads still die with the process."""
+    attempts, and best-effort join the outer loader (bounded) so no
+    uncontrolled new recovery work is left behind.
+
+    Honest limits: a hung *inner* detector operation cannot be terminated
+    from this process — it keeps running as a daemon until it finishes or
+    the process exits. It can no longer publish readiness (stale generation),
+    start new loads (start refused), or corrupt a new lifecycle: the
+    detector-busy slot stays occupied until the thread itself exits, and any
+    post-shutdown in-process load is refused. Daemon threads die with the
+    process."""
     _shutdown_event.set()
     with _load_lock:
         global _load_generation
@@ -557,11 +620,14 @@ def apply_chaos(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _needs_recovery_locked() -> bool:
     """True when an explicit recovery attempt is meaningful: chaos-induced
-    states and stable FAILED states (operator asked to try again)."""
+    states and stable FAILED states (operator asked to try again). A busy
+    refusal is recoverable too: it re-attempts immediately and either finds
+    the slot free or refuses fast again — deterministic, never accumulating."""
     phase = state.get("phase", "")
     return (
         phase.startswith("chaos")
         or phase.startswith("detector_failed")
+        or phase.startswith("detector_busy")
         or phase.startswith("db_failed")
         or phase.startswith("timeout")
     )
@@ -619,14 +685,42 @@ def inject(failure: str):
 _schema_lock = threading.Lock()
 _schema_ready = False
 
+#: Advisory-lock key for schema init (see _ensure_schema). Any constant string
+#: works; hashtext() folds it to 32 bits inside the database.
+_SCHEMA_ADVISORY_KEY = "faceattend_schema_init"
+
+
+def _uses_advisory_lock(engine) -> bool:
+    """True when schema DDL can be serialized with a PostgreSQL advisory lock.
+
+    Only PostgreSQL is used here (JSONB columns, psycopg2 driver, PG-only
+    compose/K8s); anything else keeps the legacy unlocked path so no
+    PostgreSQL-specific SQL ever runs on another dialect.
+    """
+    try:
+        return engine.dialect.name == "postgresql"
+    except Exception:
+        return False
+
 
 def _ensure_schema() -> None:
     """Single schema owner for MARP lifecycle DDL. Serialized so concurrent
     loader/telemetry threads cannot race CREATE TABLE; idempotent afterwards.
     Real (non-race) failures propagate to the caller for classification —
-    only the duplicate-table race is absorbed here."""
+    only the duplicate-object race is absorbed here.
+
+    R10: cross-process safety. The in-process _schema_lock cannot serialize
+    separate application instances starting against the same fresh database
+    (each CREATE TABLE also creates a pg_type rowtype, so the loser fails
+    with UniqueViolation on pg_type, not a plain duplicate-table error).
+    On PostgreSQL the DDL therefore runs inside one transaction holding
+    pg_advisory_xact_lock for the whole check-then-create window; the lock is
+    transaction-scoped so it releases automatically on commit/rollback and a
+    second initializer simply waits, then no-ops on the existing tables."""
     global _schema_ready
-    from sqlalchemy.exc import OperationalError, ProgrammingError
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError, OperationalError, \
+        ProgrammingError
     from ..core.database import Base, engine
     from ..models.telemetry import MarpTelemetry  # noqa: F401 (register table)
     if _schema_ready:
@@ -637,9 +731,16 @@ def _ensure_schema() -> None:
             pass
     with _schema_lock:
         try:
-            Base.metadata.create_all(engine, checkfirst=True)
+            if _uses_advisory_lock(engine):
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "SELECT pg_advisory_xact_lock(hashtext("
+                        "'faceattend_schema_init'))"))
+                    Base.metadata.create_all(bind=conn, checkfirst=True)
+            else:
+                Base.metadata.create_all(engine, checkfirst=True)
             _schema_ready = True
-        except (OperationalError, ProgrammingError) as e:
+        except (OperationalError, ProgrammingError, IntegrityError) as e:
             if "already exists" not in str(getattr(e, "orig", e)):
                 raise
 

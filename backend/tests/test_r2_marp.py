@@ -97,6 +97,12 @@ def r2_isolation():
     t = marp._load_thread
     if t is not None and t.is_alive():
         t.join(timeout=12.0)
+    # A previous test's inner detector thread may still be winding down
+    # after its release. Wait for the slot to clear so the next test never
+    # inherits a stale busy refusal (cross-test determinism, not product
+    # behavior: a live predecessor legitimately triggers FAILED_BUSY).
+    assert wait_for(lambda: marp.detector_inflight() == 0, timeout_s=10.0), \
+        "leaked inner detector thread across tests"
     marp._shutdown_event.clear()
     marp.state.clear()
     marp.state.update(snap["state"])
@@ -433,6 +439,171 @@ def test_no_recovery_worker_after_shutdown(fake_detector):
     time.sleep(0.3)
     assert threading.active_count() <= before + 2  # telemetry threads only
     assert marp._load_thread is None or not marp._load_thread.is_alive()
+
+
+@pytest.fixture()
+def blocking_detector(monkeypatch):
+    """Fake detector whose load() blocks until explicitly released.
+
+    Teardown ALWAYS releases it, so a deliberately hung operation can never
+    leak into the next test.
+    """
+    fake = FakeDetector()
+    fake.mode = "block"
+    fake.block_timeout = 120.0
+    monkeypatch.setattr(fdmod, "detector", fake)
+    yield fake
+    fake.release.set()
+
+
+def _await_kind(kind, timeout_s=15.0):
+    assert wait_for(lambda: ENGINE.failure_kind == kind, timeout_s), (
+        f"stage={ENGINE.stage} phase={marp.state.get('phase')} "
+        f"kind={ENGINE.failure_kind} err={ENGINE.last_error}"
+    )
+
+
+def test_permanent_block_times_out_truthfully(monkeypatch, blocking_detector):
+    """A hung detector must hit the configured deadline with a truthful state."""
+    monkeypatch.setattr(marp.config, "MODEL_LOAD_SECONDS", 1)
+    marp.start_background_load("boot")
+    _await_stage("FAILED")
+    assert ENGINE.failure_kind == "timeout"
+    assert marp.state["phase"].startswith("timeout")
+    assert marp.marp_state() == "FAILED_TIMEOUT"
+    body, code = ENGINE.readiness()
+    assert code == 503 and body["failure_kind"] == "timeout"
+
+
+def test_recovery_while_blocked_starts_no_new_detector(monkeypatch,
+                                                       blocking_detector):
+    """Core gate: recovery during a hung load must NOT start another detector
+    operation. Exactly one inner invocation total; immediate explicit refusal."""
+    monkeypatch.setattr(marp.config, "MODEL_LOAD_SECONDS", 1)
+    marp.start_background_load("boot")
+    _await_stage("FAILED")
+    assert ENGINE.failure_kind == "timeout"
+    assert blocking_detector.calls == 1
+    t0 = time.time()
+    marp.start_background_load("recovery")
+    _await_kind("busy")
+    assert time.time() - t0 < 5.0, "refusal must be fast, not another budget wait"
+    assert ENGINE.stage == "FAILED"
+    assert marp.state["phase"].startswith("detector_busy")
+    assert marp.marp_state() == "FAILED_BUSY"
+    assert blocking_detector.calls == 1, "a second detector worker started"
+    assert marp.detector_inflight() == 1
+    body, code = ENGINE.readiness()
+    assert code == 503 and body["failure_kind"] == "busy"
+
+
+def test_repeated_recoveries_while_blocked_stay_bounded(monkeypatch,
+                                                        blocking_detector):
+    """Five recoveries against a hung detector: defined behavior (fast busy
+    refusal each time), zero additional detector operations."""
+    monkeypatch.setattr(marp.config, "MODEL_LOAD_SECONDS", 1)
+    marp.start_background_load("boot")
+    _await_stage("FAILED")
+    for _ in range(5):
+        marp.start_background_load("recovery")
+        _await_kind("busy")
+        assert ENGINE.stage == "FAILED"
+    assert blocking_detector.calls == 1
+    assert marp.detector_inflight() == 1
+
+
+def test_release_then_recover_succeeds(monkeypatch, blocking_detector):
+    """Once the old operation is released, the path forward works again."""
+    monkeypatch.setattr(marp.config, "MODEL_LOAD_SECONDS", 1)
+    marp.start_background_load("boot")
+    _await_stage("FAILED")
+    assert ENGINE.failure_kind == "timeout"
+    blocking_detector.release.set()  # hung op finally completes; ignored.
+    assert wait_for(lambda: not marp.detector_inflight(), timeout_s=10.0)
+    assert ENGINE.stage == "FAILED"  # late completion changed nothing
+    blocking_detector.mode = "ok"
+    marp.start_background_load("recovery")
+    _await_stage("READY")
+    assert blocking_detector.calls == 2  # exactly one new detector operation
+
+
+def test_late_success_ignored_after_busy(monkeypatch, blocking_detector):
+    monkeypatch.setattr(marp.config, "MODEL_LOAD_SECONDS", 1)
+    marp.start_background_load("boot")
+    _await_stage("FAILED")
+    marp.start_background_load("recovery")
+    _await_kind("busy")
+    blocking_detector.mode = "ok"
+    blocking_detector.release.set()  # old op succeeds late: must be ignored
+    assert wait_for(lambda: not marp.detector_inflight(), timeout_s=10.0)
+    time.sleep(0.3)
+    assert ENGINE.stage == "FAILED"
+    assert ENGINE.failure_kind == "busy"
+
+
+def test_late_failure_ignored_after_busy(monkeypatch, blocking_detector):
+    monkeypatch.setattr(marp.config, "MODEL_LOAD_SECONDS", 1)
+    marp.start_background_load("boot")
+    _await_stage("FAILED")
+    marp.start_background_load("recovery")
+    _await_kind("busy")
+    blocking_detector.mode = "fail"
+    blocking_detector.release.set()  # old op fails late: must be ignored
+    assert wait_for(lambda: not marp.detector_inflight(), timeout_s=10.0)
+    time.sleep(0.3)
+    assert ENGINE.failure_kind == "busy"
+    assert marp.state["phase"].startswith("detector_busy")
+
+
+def test_shutdown_during_blocked_inner(monkeypatch, blocking_detector):
+    """Shutdown contract: no new work, stale results discarded, lingering
+    inner worker honestly reported (threads cannot be killed)."""
+    from app.routers import marp_router
+
+    marp.start_background_load("boot")
+    assert wait_for(lambda: marp.state.get("phase") == "warming_up_detector")
+    marp.note_shutdown()
+    assert marp.start_background_load("recovery") == marp._current_generation()
+    body, code = ENGINE.readiness()
+    assert code == 503 and body["failure_kind"] == "shutdown"
+    assert marp_router.liveness()["status"] == "alive"
+    # The hung inner operation is still alive: Python cannot terminate it.
+    assert marp.detector_inflight() == 1
+    blocking_detector.release.set()  # simulate eventual completion
+    assert wait_for(lambda: not marp.detector_inflight(), timeout_s=10.0)
+    time.sleep(0.3)
+    assert ENGINE.stage == "SHUTDOWN"  # late result committed nothing
+    assert ENGINE.failure_kind is None or ENGINE.failure_kind == "shutdown"
+
+
+def test_status_inspection_free_during_block(blocking_detector):
+    """Locks are never held across blocking waits: probes stay responsive."""
+    from app.routers import marp_router
+
+    marp.start_background_load("boot")
+    assert wait_for(lambda: marp.state.get("phase") == "warming_up_detector")
+    t0 = time.time()
+    assert marp_router.liveness()["status"] == "alive"
+    resp = marp_router.readiness()
+    assert resp.status_code == 503
+    assert time.time() - t0 < 5.0
+
+
+def test_normal_path_unaffected_by_slot(fake_detector):
+    """A healthy detector never sees a false busy refusal, across attempts."""
+    marp.start_background_load("boot")
+    _await_stage("READY")
+    assert marp.detector_inflight() == 0
+    # Wait for the finished worker thread to exit so the next start is a
+    # genuinely new attempt (not an attach to a just-finished worker).
+    assert wait_for(lambda: not marp._loader_alive(), timeout_s=5.0)
+    marp.start_background_load("recovery")
+    # Await the new attempt's detector call itself: stage is already READY
+    # from the previous attempt, so awaiting READY would return instantly and
+    # race the new worker.
+    assert wait_for(lambda: fake_detector.calls == 2, timeout_s=10.0)
+    _await_stage("READY")
+    assert marp.detector_inflight() == 0
 
 
 def test_fresh_schema_init_no_duplicate_race():

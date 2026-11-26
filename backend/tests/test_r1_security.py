@@ -27,6 +27,9 @@ import pytest
 # R1_TEST_DATABASE_URL selects the driver for the environment under test:
 #   - venv (psycopg v3):      postgresql+psycopg://postgres@localhost/faceattend_r1_test
 #   - prod image (psycopg2):  postgresql://postgres@localhost/faceattend_r1_test
+# R7 note: this file is also executed inside the pinned py3.11 container,
+# where only psycopg2 is available (requirements.txt); the default URL below
+# is overridden via R1_TEST_DATABASE_URL in that harness.
 os.environ["ENVIRONMENT"] = "test"
 if "R1_TEST_DATABASE_URL" in os.environ:
     # Explicit override wins (the prod image bakes its own DATABASE_URL via
@@ -111,11 +114,17 @@ def db():
     # (marp_engine.py:260,382-386). On a fresh database that can race this
     # call (check-then-create on marp_telemetry). Retry once on the duplicate-
     # table race only; any other error still fails loudly.
-    from sqlalchemy.exc import OperationalError, ProgrammingError
+    # R9: the same first-touch race can surface as IntegrityError
+    # (UniqueViolation on pg_type) when a MARP telemetry daemon thread's own
+    # create_all (via ENGINE.set_stage -> _log_telemetry_async, e.g. from the
+    # marp_ready fixture) wins the in-flight CREATE TABLE. Same race, same
+    # retry; anything without "already exists" still fails loudly.
+    from sqlalchemy.exc import IntegrityError, OperationalError, \
+        ProgrammingError
 
     try:
         Base.metadata.create_all(bind=engine)
-    except (OperationalError, ProgrammingError) as e:
+    except (OperationalError, ProgrammingError, IntegrityError) as e:
         # DuplicateTable surfaces as ProgrammingError on psycopg2.
         if "already exists" not in str(getattr(e, "orig", e)):
             raise

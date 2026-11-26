@@ -7,7 +7,27 @@ psutil==5.9.6
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
-opencv-python-headless==4.8.1.78
+# R7: exactly TWO OpenCV distributions at ONE build (4.8.1.78). Both names
+# are required by third parties: ultralytics 8.0.227 declares
+# `opencv-python>=4.6.0` (verified in its wheel METADATA) and mediapipe 0.10.9
+# declares unbounded `opencv-contrib-python` (verified via importlib.metadata);
+# omitting either name makes pip float the missing one to latest (5.x), which
+# shadows the pinned cv2 with a numpy-2-only ABI. opencv-python-headless is
+# deliberately NOT listed: nothing requires it by name, and every remaining
+# dist ships the same 4.8.1.78 cv2 core, so a third same-path writer only adds
+# shadowing fragility. Verified 2026-10-29: duo installs cleanly, cv2 reports
+# 4.8.1 (GUI/QT5 build wins the same-build shadowing), mediapipe imports, and
+# the app uses core cv2 APIs only (no GUI calls, no contrib-only modules;
+# YOLO/MediaPipe import lazily with Haar fallback). The GUI-capable cv2 runs
+# under the libGL/libglib/libsm/libxext already in backend/Dockerfile.
+opencv-python==4.8.1.78
+opencv-contrib-python==4.8.1.78
 mediapipe==0.10.9
 ultralytics==8.0.227
-numpy
+# R7: numpy 1.26.x is the last 1.x line (cp311 wheels). Required because
+# opencv 4.8.1.78 wheels are built against the numpy 1.x ABI while bare
+# `numpy` resolves to 2.x, which fails at import with
+# "numpy.core.multiarray failed to import". Satisfies ultralytics>=1.22.2
+# and mediapipe's unbounded numpy requirement. opencv 5.x wheels instead
+# require numpy>=2 (py>=3.9) and are therefore excluded by this pin set.
+numpy==1.26.4
