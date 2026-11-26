@@ -60,3 +60,33 @@ CREATE TABLE IF NOT EXISTS detection_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_detection_events_timestamp ON detection_events (timestamp DESC);
+
+-- ----------------------------------------------------------------------------
+-- 5. Operator users (auth hardening Phase 2) — merged from backend/init_db.sql
+-- Seeded at runtime by auth_router._ensure_admin() with bcrypt hash.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id            SERIAL PRIMARY KEY,
+    username      VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(256) NOT NULL DEFAULT '',
+    role          VARCHAR(20)  NOT NULL DEFAULT 'admin',
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- ----------------------------------------------------------------------------
+-- 6. MARP research telemetry (Phase 5) — persistent state/chaos log.
+-- event_type: STATE_CHANGE | CHAOS_INJECTED | CHAOS_RESET | BOOT | PROBE_FAIL ...
+-- active_chaos_params: JSONB snapshot of chaos_knobs at event time (flattened
+-- on CSV export so researchers can plot directly in Excel/Python).
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS marp_telemetry (
+    id                  SERIAL PRIMARY KEY,
+    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_type          VARCHAR(50) NOT NULL,
+    phase               VARCHAR(100) NOT NULL DEFAULT '',
+    vram_allocated_mb   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    load_duration_ms    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    active_chaos_params JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_marp_telemetry_timestamp ON marp_telemetry (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_marp_telemetry_event ON marp_telemetry (event_type);

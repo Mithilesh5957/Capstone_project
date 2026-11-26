@@ -1,3 +1,43 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#F4F4F0] text-black font-sans antialiased;
+  }
+}
+
+@layer components {
+  .brutal-card {
+    @apply bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none;
+  }
+  .brutal-btn {
+    @apply bg-black text-[#E2FF00] font-extrabold tracking-wider uppercase border-4 border-black py-3 px-6 hover:bg-[#E2FF00] hover:text-black hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all duration-150;
+  }
+  .brutal-input {
+    @apply w-full bg-[#F4F4F0] border-4 border-black p-3 font-mono font-bold text-black focus:bg-white focus:outline-none focus:ring-0;
+  }
+  /* Compat bridge: legacy nb-* tokens map onto the strict brutal base so the
+     modular App.jsx/pages bundle renders identically. */
+  .nb-page { @apply min-h-screen bg-[#F4F4F0] text-black font-sans; }
+  .nb-card { @apply brutal-card; }
+  .nb-card-lime { @apply bg-[#E2FF00] border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none; }
+  .nb-card-black { @apply bg-black text-[#E2FF00] border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] rounded-none; }
+  .nb-title { @apply font-extrabold uppercase tracking-wider; }
+  .nb-input { @apply brutal-input text-sm px-4 py-2; }
+  .nb-btn { @apply brutal-btn text-sm px-5 py-2.5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]; }
+  .nb-btn-lime { @apply bg-[#E2FF00] text-black font-extrabold tracking-wider uppercase border-4 border-black px-5 py-2.5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all; }
+  .nb-btn-black { @apply brutal-btn text-sm px-5 py-2.5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]; }
+  .nb-btn-white { @apply bg-white text-black font-extrabold tracking-wider uppercase border-4 border-black px-5 py-2.5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all; }
+  .nb-btn-red { @apply bg-[#DC2626] text-white font-extrabold tracking-wider uppercase border-4 border-black px-5 py-2.5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all; }
+  .nb-tag { @apply inline-block rounded-none border-2 border-black px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider; }
+  .nb-tag-lime { @apply nb-tag bg-black text-[#E2FF00]; }
+  .nb-tag-yellow { @apply nb-tag bg-[#E2FF00] text-black; }
+  .nb-tag-red { @apply nb-tag bg-[#DC2626] text-white; }
+  .nb-tag-white { @apply nb-tag bg-white text-black; }
+  .nb-table th { @apply text-left p-3 font-extrabold uppercase tracking-wider text-xs bg-black text-[#E2FF00]; }
+  .nb-table td { @apply p-3 border-t-4 border-black; }
+  @keyframes nb-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+  .nb-pulse { animation: nb-pulse 1.2s ease-in-out infinite; }
+}

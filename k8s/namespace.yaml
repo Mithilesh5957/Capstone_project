@@ -1,0 +1,7 @@
+# FACEATTEND — dedicated namespace (applied via kustomization.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: faceattend
+  labels:
+    app.kubernetes.io/part-of: faceattend

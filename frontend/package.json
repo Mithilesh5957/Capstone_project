@@ -12,6 +12,9 @@
     "postcss": "^8.4.24",
     "tailwindcss": "^3.3.2"
   },
+  "overrides": {
+    "typescript": "4.9.5"
+  },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",

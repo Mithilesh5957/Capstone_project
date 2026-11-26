@@ -1,0 +1,628 @@
+/* FACEATTEND design tokens (R4 foundation). Vanilla CSS: no framework, no
+ * remote fonts. Imported once by src/index.js into the CRA bundle. */
+
+:root {
+  --fa-bg: #0b1220;
+  --fa-surface: #111b2d;
+  --fa-surface-elev: #18253a;
+  --fa-glass: rgba(24, 37, 58, 0.72);
+  --fa-text: #f1f5fc;
+  --fa-text-muted: #a8b5ca;
+  --fa-accent: #75b7ff;
+  --fa-accent-2: #5edbc6;
+  --fa-ok: #52d6a0;
+  --fa-warn: #f5c66b;
+  --fa-err: #ff7887;
+  --fa-ink: #0b1220;
+  --fa-border: rgba(148, 178, 255, 0.16);
+  --fa-ring: rgba(117, 183, 255, 0.65);
+  --fa-font: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --fa-mono: ui-monospace, "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --fa-t-xs: 11px;
+  --fa-t-sm: 13px;
+  --fa-t-md: 15px;
+  --fa-t-lg: 20px;
+  --fa-t-xl: 26px;
+  --fa-s-1: 4px;
+  --fa-s-2: 8px;
+  --fa-s-3: 12px;
+  --fa-s-4: 16px;
+  --fa-s-6: 24px;
+  --fa-s-8: 32px;
+  --fa-r-sm: 8px;
+  --fa-r-md: 12px;
+  --fa-r-lg: 16px;
+  --fa-shadow-1: 0 1px 2px rgba(2, 6, 16, 0.5);
+  --fa-shadow-2: 0 8px 28px rgba(2, 6, 16, 0.55);
+  --fa-t-fast: 120ms;
+  --fa-t-med: 200ms;
+  --fa-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --fa-z-nav: 10;
+  --fa-z-pop: 30;
+  --fa-z-backdrop: 40;
+  --fa-z-modal: 50;
+}
+
+.fa-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 500px at 85% -10%, rgba(117, 183, 255, 0.12), transparent 60%),
+    radial-gradient(900px 480px at -10% 110%, rgba(94, 219, 198, 0.08), transparent 60%),
+    var(--fa-bg);
+  color: var(--fa-text);
+  font-family: var(--fa-font);
+}
+
+.fa-card {
+  background: var(--fa-surface);
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-md);
+  box-shadow: var(--fa-shadow-1);
+}
+
+.fa-card-glass {
+  background: var(--fa-glass);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-md);
+  box-shadow: var(--fa-shadow-2);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fa-card-glass {
+    background: var(--fa-surface-elev);
+  }
+}
+
+.fa-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fa-s-2);
+  min-height: 40px;
+  padding: 0 var(--fa-s-4);
+  border-radius: var(--fa-r-sm);
+  border: 1px solid transparent;
+  font-family: var(--fa-font);
+  font-size: var(--fa-t-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--fa-t-fast) var(--fa-ease), transform var(--fa-t-fast) var(--fa-ease),
+    box-shadow var(--fa-t-fast) var(--fa-ease);
+}
+
+.fa-btn:focus-visible {
+  outline: 2px solid var(--fa-ring);
+  outline-offset: 2px;
+}
+
+.fa-btn-primary {
+  background: var(--fa-accent);
+  color: var(--fa-ink);
+}
+
+.fa-btn-primary:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.fa-btn-secondary {
+  background: transparent;
+  color: var(--fa-text);
+  border-color: var(--fa-border);
+}
+
+.fa-btn-secondary:hover {
+  border-color: var(--fa-accent);
+  color: var(--fa-accent);
+}
+
+.fa-btn-danger {
+  background: var(--fa-err);
+  color: var(--fa-ink);
+}
+
+.fa-btn-danger:hover {
+  filter: brightness(1.08);
+}
+
+.fa-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.fa-btn[aria-pressed="true"] {
+  background: var(--fa-accent);
+  color: var(--fa-ink);
+  border-color: transparent;
+}
+
+.fa-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: fa-spin 0.9s linear infinite;
+}
+
+@keyframes fa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.fa-field {
+  display: block;
+  margin-bottom: var(--fa-s-3);
+}
+
+.fa-field > span {
+  display: block;
+  font-size: var(--fa-t-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fa-text-muted);
+  margin-bottom: var(--fa-s-1);
+}
+
+.fa-input {
+  width: 100%;
+  background: var(--fa-bg);
+  color: var(--fa-text);
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-sm);
+  padding: 10px 12px;
+  font-size: var(--fa-t-md);
+  font-family: var(--fa-font);
+}
+
+.fa-input::placeholder {
+  color: var(--fa-text-muted);
+  opacity: 0.7;
+}
+
+.fa-input:focus {
+  outline: 2px solid var(--fa-ring);
+  outline-offset: 1px;
+  border-color: var(--fa-accent);
+}
+
+.fa-input[aria-invalid="true"] {
+  border-color: var(--fa-err);
+}
+
+.fa-hint {
+  font-size: var(--fa-t-xs);
+  color: var(--fa-text-muted);
+  margin-top: var(--fa-s-1);
+}
+
+.fa-error {
+  font-size: var(--fa-t-xs);
+  font-weight: 600;
+  color: var(--fa-err);
+  margin-top: var(--fa-s-1);
+}
+
+.fa-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fa-s-1);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: var(--fa-t-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid var(--fa-border);
+}
+
+.fa-tag-ok { background: var(--fa-ok); color: var(--fa-ink); border-color: transparent; }
+.fa-tag-warn { background: var(--fa-warn); color: var(--fa-ink); border-color: transparent; }
+.fa-tag-err { background: var(--fa-err); color: var(--fa-ink); border-color: transparent; }
+.fa-tag-info { background: rgba(117, 183, 255, 0.16); color: var(--fa-accent); }
+.fa-tag-neutral { background: transparent; color: var(--fa-text-muted); }
+
+.fa-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.fa-section-head h2 {
+  font-size: var(--fa-t-lg);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.fa-section-head p {
+  font-size: var(--fa-t-sm);
+  color: var(--fa-text-muted);
+  margin: var(--fa-s-1) 0 0;
+}
+
+.fa-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--fa-z-backdrop);
+  background: rgba(4, 8, 18, 0.66);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--fa-s-4);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fa-backdrop {
+    background: rgba(4, 8, 18, 0.88);
+  }
+}
+
+.fa-modal {
+  z-index: var(--fa-z-modal);
+  width: min(440px, 100%);
+  background: var(--fa-surface-elev);
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-lg);
+  box-shadow: var(--fa-shadow-2);
+  padding: var(--fa-s-6);
+}
+
+.fa-modal h2 {
+  font-size: var(--fa-t-lg);
+  font-weight: 800;
+  margin: 0 0 var(--fa-s-2);
+}
+
+.fa-modal p {
+  font-size: var(--fa-t-sm);
+  color: var(--fa-text-muted);
+  margin: 0 0 var(--fa-s-4);
+}
+
+.fa-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--fa-s-2);
+}
+
+.fa-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-md);
+  background: var(--fa-surface);
+}
+
+.fa-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fa-t-sm);
+  background: transparent;
+  min-width: 560px;
+}
+
+.fa-table thead tr {
+  background: rgba(4, 8, 18, 0.55);
+}
+
+.fa-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: var(--fa-t-xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fa-text-muted);
+  border-bottom: 1px solid var(--fa-border);
+  white-space: nowrap;
+}
+
+.fa-table td {
+  padding: 10px 12px;
+  border-top: 1px solid var(--fa-border);
+  vertical-align: middle;
+}
+
+.fa-table tbody tr:first-child td {
+  border-top: none;
+}
+
+.fa-table .fa-mono {
+  font-family: var(--fa-mono);
+  font-size: var(--fa-t-xs);
+}
+
+.fa-select {
+  width: auto;
+  background: var(--fa-bg);
+  color: var(--fa-text);
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-sm);
+  padding: 8px 10px;
+  font-size: var(--fa-t-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-family: var(--fa-mono);
+}
+
+.fa-select:focus {
+  outline: 2px solid var(--fa-ring);
+  outline-offset: 1px;
+}
+
+.fa-video-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--fa-r-md);
+  border: 1px solid var(--fa-border);
+  background: #000;
+  aspect-ratio: 4 / 3;
+}
+
+.fa-video-frame video,
+.fa-video-frame canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fa-log {
+  height: 10rem;
+  overflow-y: auto;
+  font-family: var(--fa-mono);
+  font-size: var(--fa-t-xs);
+  background: var(--fa-bg);
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-sm);
+  padding: var(--fa-s-2);
+}
+
+.fa-log li + li {
+  margin-top: var(--fa-s-1);
+}
+
+.fa-empty {
+  font-family: var(--fa-mono);
+  font-size: var(--fa-t-xs);
+  color: var(--fa-text-muted);
+  text-align: center;
+  padding: var(--fa-s-4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fa-btn,
+  .fa-spinner {
+    transition-duration: 1ms;
+    animation-duration: 1ms;
+  }
+}
+
+@media (max-width: 640px) {
+  .fa-modal {
+    padding: var(--fa-s-4);
+  }
+}
+
+/* ---- D1 visual refresh: additive utilities (existing tokens untouched) ---- */
+
+:root {
+  --fa-accent-deep: #4f8ff7;
+  --fa-accent-soft: rgba(117, 183, 255, 0.14);
+  --fa-teal-soft: rgba(94, 219, 198, 0.12);
+  --fa-glass-strong: rgba(28, 44, 72, 0.82);
+  --fa-shadow-3: 0 18px 48px rgba(2, 6, 16, 0.6);
+  --fa-shadow-glow: 0 0 0 1px rgba(117, 183, 255, 0.22), 0 8px 30px rgba(79, 143, 247, 0.25);
+  --fa-t-xxl: 32px;
+  --fa-ease-out: cubic-bezier(0.16, 0.8, 0.24, 1);
+}
+
+/* Layered backdrop: graphite depth + aurora accents + fine grid. */
+.fa-page {
+  background:
+    radial-gradient(1100px 500px at 85% -10%, rgba(117, 183, 255, 0.14), transparent 60%),
+    radial-gradient(900px 480px at -10% 110%, rgba(94, 219, 198, 0.09), transparent 60%),
+    radial-gradient(700px 420px at 50% 120%, rgba(79, 143, 247, 0.07), transparent 60%),
+    var(--fa-bg);
+}
+
+.fa-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(148, 178, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 178, 255, 0.045) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 30%, transparent 75%);
+}
+
+/* Gradient brand text (decorative; accessible name unchanged). */
+.fa-brand-gradient {
+  background: linear-gradient(100deg, #fff 20%, var(--fa-accent) 55%, var(--fa-accent-2) 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Elevated glass panel for hero / sidebar surfaces. */
+.fa-glass-strong {
+  background: var(--fa-glass-strong);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  backdrop-filter: blur(18px) saturate(1.25);
+  border: 1px solid var(--fa-border);
+  border-radius: var(--fa-r-lg);
+  box-shadow: var(--fa-shadow-3);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fa-glass-strong {
+    background: var(--fa-surface-elev);
+  }
+}
+
+/* Card hover lift (subtle; no layout shift). */
+.fa-lift {
+  transition: transform var(--fa-t-med) var(--fa-ease-out), box-shadow var(--fa-t-med) var(--fa-ease-out), border-color var(--fa-t-fast) var(--fa-ease);
+}
+.fa-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--fa-shadow-2);
+  border-color: rgba(148, 178, 255, 0.32);
+}
+
+/* Page/tab enter transition. Applied to a keyed wrapper; content and
+ * accessible names are unchanged, only the entrance is animated. */
+@keyframes fa-page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.fa-page-enter {
+  animation: fa-page-in var(--fa-t-med) var(--fa-ease-out);
+}
+
+/* Modal pop entrance. */
+@keyframes fa-modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.fa-modal {
+  animation: fa-modal-in var(--fa-t-med) var(--fa-ease-out);
+}
+.fa-backdrop {
+  animation: fa-fade-in var(--fa-t-fast) var(--fa-ease-out);
+}
+@keyframes fa-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Live pulse dot for recording/streaming states (decorative span; the
+ * adjacent text label always carries the meaning for assistive tech). */
+.fa-pulse-dot {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fa-err);
+  flex: none;
+}
+.fa-pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--fa-err);
+  opacity: 0.7;
+  animation: fa-ping 1.6s var(--fa-ease-out) infinite;
+}
+@keyframes fa-ping {
+  0% { transform: scale(0.6); opacity: 0.8; }
+  80%, 100% { transform: scale(1.15); opacity: 0; }
+}
+.fa-pulse-dot.ok { background: var(--fa-ok); }
+.fa-pulse-dot.ok::after { border-color: var(--fa-ok); }
+
+/* Avatar chip: deterministic hue set inline from the record id. */
+.fa-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 50%;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+/* Animated stat bars (width transitions on data change). */
+.fa-stat-bar {
+  transition: width var(--fa-t-med) var(--fa-ease-out);
+}
+
+/* Skeleton shimmer for loading placeholders. */
+.fa-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(148, 178, 255, 0.10);
+  border-radius: var(--fa-r-sm);
+  min-height: 14px;
+}
+.fa-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(148, 178, 255, 0.16), transparent);
+  animation: fa-shimmer 1.4s var(--fa-ease) infinite;
+}
+@keyframes fa-shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Toast-style floating status (used for transient form/chaos feedback;
+ * role="status" semantics unchanged). */
+@keyframes fa-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.fa-toast {
+  animation: fa-toast-in var(--  --fa-t-med, 200ms) var(--fa-ease-out);
+  border: 1px solid var(--fa-border);
+  border-left: 3px solid var(--fa-accent);
+  border-radius: var(--fa-r-sm);
+  background: rgba(24, 37, 58, 0.85);
+  padding: 8px 12px;
+}
+
+/* Section eyebrow label for dashboard hierarchy. */
+.fa-eyebrow {
+  font-size: var(--fa-t-xs);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fa-text-muted);
+  margin: 0;
+}
+
+/* Range sliders inherit the accent. */
+input[type="range"].fa-range {
+  width: 100%;
+  accent-color: var(--fa-accent);
+}
+
+/* Keep motion safe: extend the reduced-motion contract to new animations. */
+@media (prefers-reduced-motion: reduce) {
+  .fa-btn,
+  .fa-spinner,
+  .fa-page-enter,
+  .fa-modal,
+  .fa-backdrop,
+  .fa-lift,
+  .fa-pulse-dot::after,
+  .fa-skeleton::after,
+  .fa-toast,
+  .fa-stat-bar {
+    transition-duration: 1ms;
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+  }
+  .fa-lift:hover {
+    transform: none;
+  }
+}

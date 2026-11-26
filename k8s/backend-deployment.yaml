@@ -1,0 +1,147 @@
+# FACEATTEND backend — ConfigMap (non-sensitive) + Deployment.
+# Secrets are NOT stored in this repository. The Deployment references the
+# `faceattend-backend-secret` Secret, which the operator creates OUTSIDE
+# source control (see k8s/backend-secret.example.yaml). Missing Secret or
+# missing keys block pod creation; weak values fail the app's own startup
+# validation (fail-closed). This manifest always runs ENVIRONMENT=production.
+# MARP integration: K8s probes hit the MARP engine directly so no camera
+# traffic is routed before YOLOv8/MediaPipe weights are in VRAM (READY 200).
+#
+# NOTE: this manifest is still NOT a complete deployment (Phase-0 C15/C16):
+# no Postgres StatefulSet/Service, no published GHCR images, and the frontend
+# API URL strategy is unresolved. Secrets wiring below is necessary but not
+# sufficient for production readiness.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faceattend-backend-config
+  labels:
+    app: faceattend-backend
+data:
+  ENVIRONMENT: "production"
+  MODEL_LOAD_SECONDS: "15"
+  YOLO_WEIGHTS: "yolov8n-face.pt"
+  FACE_BACKEND_ORDER: "yolo,mediapipe,haar"
+  REID_THRESHOLD: "0.85"
+  ADMIN_USER: "admin"
+  ADMIN_EMAIL: "admin@college.edu"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faceattend-backend
+  labels:
+    app: faceattend-backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: faceattend-backend
+  template:
+    metadata:
+      labels:
+        app: faceattend-backend
+    spec:
+      containers:
+        - name: faceattend-backend
+          # Exact image pinned per release in kustomization.yaml (images:).
+          # Base reference below is the verified owner namespace; tags must
+          # point at pushed, verified builds — never an unpushed local tag.
+          image: ghcr.io/mithilesh5957/capstone_project-backend:main
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            # Explicit production mode (required: the app refuses to boot
+            # without ENVIRONMENT; unknown/blank values fail clearly).
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-backend-config
+                  key: ENVIRONMENT
+            - name: MODEL_LOAD_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-backend-config
+                  key: MODEL_LOAD_SECONDS
+            - name: YOLO_WEIGHTS
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-backend-config
+                  key: YOLO_WEIGHTS
+            - name: FACE_BACKEND_ORDER
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-backend-config
+                  key: FACE_BACKEND_ORDER
+            - name: ADMIN_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-backend-config
+                  key: ADMIN_USER
+            - name: ADMIN_EMAIL
+              valueFrom:
+                configMapKeyRef:
+                  name: faceattend-backend-config
+                  key: ADMIN_EMAIL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: faceattend-backend-secret
+                  key: JWT_SECRET
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: faceattend-backend-secret
+                  key: DATABASE_URL
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: faceattend-backend-secret
+                  key: ADMIN_PASSWORD
+          # Liveness = process alive (MARP liveness endpoint, cheap).
+          livenessProbe:
+            httpGet:
+              path: /api/v1/marp/healthz/liveness
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Startup = permits slow first boot (model-weight download can take
+          # minutes). Liveness only starts counting after this succeeds, so a
+          # cold pod is never restart-looped for loading slowly. 10s x 36 =
+          # ~6 min budget, then normal liveness/readiness take over.
+          startupProbe:
+            httpGet:
+              path: /api/v1/marp/healthz/liveness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 36
+          # Readiness = MARP READY (weights in VRAM + DB verified).
+          # Returns 503 while UNINITIALIZED/LOADING_WEIGHTS (~24s for
+          # MediaPipe/YOLOv8 warmup), 200 only at READY — K8s holds
+          # Endpoints until then, so no camera traffic hits a cold model.
+          readinessProbe:
+            httpGet:
+              path: /api/v1/marp/healthz/readiness
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"

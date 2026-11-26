@@ -1,0 +1,22 @@
+# FACEATTEND backend test dependencies (R7 audit).
+#
+# Test-only packages, kept OUT of backend/requirements.txt (production image)
+# on purpose: the deployed API never imports pytest, httpx, or yaml.
+# Install for isolated runs from the repo root:
+#   pip install -r backend/tests/requirements.txt
+# Versions are evidence-pinned, not aspirational:
+# - pytest==9.1.1: used for the Phase 1B host run (25 passed) and matches the
+#   pinned browser-toolchain era (frontend/tests-browser/requirements.txt).
+# - httpx==0.27.2: last 0.27.x line. REQUIRED: the pinned starlette==0.27.0
+#   TestClient uses the `Client(app=...)` shortcut that httpx 0.28 removed;
+#   installing latest httpx breaks every TestClient-based test with
+#   `TypeError: Client.__init__() got an unexpected keyword argument 'app'`
+#   (observed 2026-10-29, fixed by this pin; full suite then 117 passed).
+# - PyYAML==6.0.3: imported by test_1b_env_config.py; version from the
+#   passing host environment.
+# Database drivers are intentionally NOT listed: the suite selects its driver
+# via R1_TEST_DATABASE_URL (postgresql://... needs psycopg2-binary from the
+# production requirements; postgresql+psycopg://... needs psycopg v3).
+pytest==9.1.1
+httpx==0.27.2
+PyYAML==6.0.3

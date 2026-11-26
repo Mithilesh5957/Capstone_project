@@ -1,0 +1,140 @@
+# FACEATTEND CI — MARP readiness + AC-2 chaos fault-injection on every commit.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  COMPOSE_PROJECT_DIR: .
+  BASE_URL: http://localhost:8000
+
+jobs:
+  build-and-test:
+    name: Build & Test (MARP + chaos)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate production compose override (fail-closed, redacted)
+        run: |
+          # 1. Missing required secrets must abort config rendering.
+          if docker compose -f docker-compose.yml -f docker-compose.prod.yml config >/dev/null 2>&1; then
+            echo "prod override rendered WITHOUT required secrets (expected failure)"; exit 1
+          fi
+          echo "missing-secrets correctly rejected"
+          # 2. With synthetic placeholder secrets, rendering must select
+          #    production mode and contain no documented dev defaults.
+          #    NOTE: values below are synthetic test-only placeholders, and
+          #    only grep COUNTS are printed — never rendered configuration.
+          export JWT_SECRET="synthetic-test-only-0123456789abcdef"
+          export ADMIN_PASSWORD="synthetic-test-only-pw"
+          export POSTGRES_PASSWORD="synthetic-test-only-db"
+          export DATABASE_URL="postgresql://analytics:synthetic-test-only-db@db:5432/analytics"
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config > /tmp/prod-config.yml
+          grep -q 'ENVIRONMENT: production' /tmp/prod-config.yml
+          test "$(grep -c 'default_dev_secret_change_me\|admin123' /tmp/prod-config.yml || true)" = "0"
+          echo "prod override renders production mode without dev defaults"
+          rm -f /tmp/prod-config.yml
+
+      - name: Build the docker-compose stack
+        run: docker compose build
+
+      - name: CV import smoke test (pinned stack, no DB needed)
+        # Catches exactly the R7 failure class: pip resolves fine but the
+        # installed NumPy/OpenCV ABI combination fails at import time.
+        run: docker compose run --rm --no-deps -e ENVIRONMENT=test backend python -c "import cv2, numpy, app.services.face_detection, app.services.face_recognition; print('cv2', cv2.__version__, '| numpy', numpy.__version__)"
+
+      - name: Start stack in background
+        run: docker compose up -d
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
+      - name: Wait for database healthy
+        run: |
+          for i in $(seq 1 24); do
+            if docker compose ps db --format json | grep -qi '"Health":"healthy"'; then
+              echo "db healthy"; break
+            fi
+            docker compose ps; sleep 5
+          done
+          docker compose ps db --format json | grep -qi '"Health":"healthy"'
+
+      - name: Wait for MARP READY (200) — proves VRAM warmup
+        run: |
+          for i in $(seq 1 36); do
+            CODE=$(curl -s -o /tmp/ready.json -w "%{http_code}" http://localhost:8000/api/v1/marp/healthz/readiness || echo 000)
+            echo "attempt $i -> HTTP $CODE"
+            cat /tmp/ready.json || true; echo
+            if [ "$CODE" = "200" ]; then exit 0; fi
+            sleep 5
+          done
+          echo "MARP never reached READY"; exit 1
+
+      - name: Execute AC-2 fault-injection (503 + DB drop recovery)
+        run: python tests/fault_injection.py --project-dir . --base-url http://localhost:8000 --json fault_report.json --csv fault_samples.csv
+
+      - name: Upload fault-injection artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ac2-fault-report
+          path: |
+            fault_report.json
+            fault_samples.csv
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v
+
+  # ------------------------------------------------------------------
+  # Push to GHCR (MOCKED FOR TEMPLATE — uncomment to enable).
+  # Pre-warmed AI images are large (torch + YOLO); push only from main.
+  #
+  # push-ghcr:
+  #   name: Push pre-warmed images to GHCR
+  #   needs: build-and-test
+  #   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+  #     packages: write
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: docker/setup-buildx-action@v3
+  #     - name: Log in to GHCR
+  #       uses: docker/login-action@v3
+  #       with:
+  #         registry: ghcr.io
+  #         username: ${{ github.actor }}
+  #         password: ${{ secrets.GITHUB_TOKEN }}
+  #     - name: Build and push backend (pre-warmed YOLOv8)
+  #       uses: docker/build-push-action@v6
+  #       with:
+  #         context: ./backend
+  #         push: true
+  #         tags: ghcr.io/faceattend/backend:latest,ghcr.io/faceattend/backend:${{ github.sha }}
+  #         cache-from: type=gha
+  #         cache-to: type=gha,mode=max
+  #     - name: Build and push frontend
+  #       uses: docker/build-push-action@v6
+  #       with:
+  #         context: ./frontend
+  #         push: true
+  #         build-args: VITE_API_URL=https://api.faceattend.example.com/api/v1
+  #         tags: ghcr.io/faceattend/frontend:latest,ghcr.io/faceattend/frontend:${{ github.sha }}
+  #         cache-from: type=gha
+  #         cache-to: type=gha,mode=max
+  # ------------------------------------------------------------------

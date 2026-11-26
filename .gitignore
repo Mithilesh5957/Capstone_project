@@ -20,6 +20,25 @@ npm-debug.log*
 pgdata/
 *.log
 
+# ML model weights (downloaded at build/runtime, never commit)
+*.pt
+*.onnx
+*.bin
+*.weights
+*.tflite
+
+# Local test/QA artifacts (regenerable; the committed suite never needs them)
+fault_report.json
+fault_samples.csv
+marp_research_data.csv
+startup_metrics.csv
+.pytest_cache/
+
+# Local populated K8s secrets (never commit real credentials).
+# Example placeholders (k8s/*.example.yaml) remain tracked.
+k8s/*-secret.yaml
+!k8s/*.example.yaml
+
 # OS / IDE
 .DS_Store
 .vscode/

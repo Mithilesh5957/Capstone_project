@@ -1,77 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-
-const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
+import {
+  FaButton,
+  FaCard,
+  FaModalFrame,
+  FaStatusIndicator,
+} from "./fa/primitives";
+import { API, SESSION_KEY, api, sessionToken, snapshot } from "./fa/request";
+import EnrollTab from "./screens/EnrollTab";
+import HubDashboard from "./screens/HubDashboard";
+import LoginScreen from "./screens/LoginScreen";
+import ScannerView from "./screens/ScannerView";
+import SettingsView from "./screens/SettingsView";
+import StudentPortal from "./screens/StudentPortal";
 
 /* ============================================================================
- * KL University — Face Attendance Portal (complete build).
- * Pages: Login gate -> Admin (College Hub / Enroll Student / Live Scanner
- * with DevOps terminal) | Student Portal (session-locked).
- * No mock data: students / attendanceLogs start as [] and fill via API.
- * Vision + DevOps logic: webcam overlay, 700ms POST /api/detect, 2s
- * /healthz/readiness poll tailed into the terminal, granular chaos endpoints.
+ * KL University — Face Attendance Portal.
+ * Login gate -> Admin (Hub / Enroll / Live Scanner + MARP chaos) | Student.
+ * Shared UI: fa/ tokens + primitives (+ fa/request for API helpers).
+ * Feature screens live in ./screens (extracted verbatim from this file in
+ * R5; behavior unchanged). No mock data: everything loads from the live API.
  * ========================================================================== */
 
-// Design tokens (Neo-Brutalist Dark Glass)
-const GLASS =
-  "bg-zinc-900/70 backdrop-blur-md border border-zinc-800 rounded-2xl shadow-[4px_4px_0px_0px_rgba(59,130,246,0.4)]";
-const INPUT =
-  "bg-zinc-950 border border-zinc-700 text-zinc-100 rounded-xl px-4 py-2 focus:border-blue-500 focus:outline-none text-sm w-full placeholder:text-zinc-600";
-const BTN_BRUTAL =
-  "font-bold rounded-xl border-b-4 active:border-b-0 active:translate-y-0.5 transition-all shadow-lg px-5 py-2.5 text-sm";
-const READY_BADGE =
-  "bg-green-500/10 text-green-400 border border-green-500/50 shadow-[0_0_10px_rgba(34,197,94,0.25)]";
-const BAD_BADGE =
-  "bg-red-500/10 text-red-400 border border-red-500/50 shadow-[0_0_10px_rgba(239,68,68,0.25)]";
-const TONE = {
-  ok: "text-green-400",
-  err: "text-red-400",
-  warn: "text-amber-400",
-  info: "text-blue-300",
-  dim: "text-zinc-500",
-};
-
-// Test login accounts (shown on the login card for judges)
-const TEST_ADMIN = { username: "admin", password: "admin123" };
-const TEST_STUDENT_PASSWORD = "student123";
-const SESSION_KEY = "face_portal_session";
-
-const DEPTS = [
-  { code: "CSE", label: "Computer Science" },
-  { code: "ECE", label: "Electronics & Comm" },
-  { code: "ME", label: "Mechanical" },
-  { code: "AI&DS", label: "AI & Data Science" },
-  { code: "EEE", label: "Electrical" },
-];
-const FILTERS = [
-  { code: "ALL", label: "All" },
-  { code: "CSE", label: "CSE" },
-  { code: "ECE", label: "ECE" },
-  { code: "ME", label: "Mechanical" },
-  { code: "AI&DS", label: "AI & DS" },
-  { code: "EEE", label: "EEE" },
-  { code: "BT", label: "Biotech" },
-];
-const DEGREES = ["B.Tech", "B.Tech (Hons)", "M.Tech", "Ph.D."];
 const ANGLES = ["Front", "Left Profile", "Right Profile", "Upper Angle"];
-
-/* ---------------- helpers (stateless) ---------------- */
-async function api(path, opts = {}) {
-  const r = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.detail || data.error || `HTTP ${r.status}`);
-  return data;
-}
-const snapshot = (video, w = 320, h = 240) => {
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  c.getContext("2d").drawImage(video, 0, 0, w, h);
-  return c.toDataURL("image/jpeg", 0.8);
-};
-const dot = (ok) => (ok ? "bg-emerald-400" : "bg-red-500");
+const BRANCHES = ["CSE", "ECE", "ME", "AI&DS", "EEE", "BT"];
+const FILTERS = ["ALL", ...BRANCHES];
 function loadSession() {
   try {
     return JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
@@ -80,118 +32,133 @@ function loadSession() {
   }
 }
 
-/* ================================================================== */
 export default function App() {
-  // Auth session (null = logged out -> login gate). Persisted in localStorage.
   const [session, setSession] = useState(loadSession);
-  const role = session?.role || "Admin";
-  const [tab, setTab] = useState("hub"); // hub | enroll | scanner
+  // Backend roles are lowercase ("admin"/"student"); normalize for display.
+  const role = (session?.role || "").toLowerCase() === "student" ? "Student" : "Admin";
 
-  // Live data (empty until API populates — no mock names anywhere)
+  // R1: pre-fix sessions stored no token (fallback login). They are not
+  // authorized for any protected API — force a fresh legitimate login.
+  // No disable comment: the effect uses only the stable setSession updater
+  // and the SESSION_KEY constant, so exhaustive-deps reports no violation.
+  useEffect(() => {
+    if (session && !session.token) {
+      localStorage.removeItem(SESSION_KEY);
+      setSession(null);
+    }
+  }, []);
+
+  // R1: expired/invalid token (401) or insufficient privilege (403) ends the
+  // session so the user must re-authenticate; other errors stay silent.
+  const handleApiError = useCallback((e) => {
+    if (e && (e.status === 401 || e.status === 403)) {
+      localStorage.removeItem(SESSION_KEY);
+      setSession(null);
+      return true;
+    }
+    return false;
+  }, []);
+  const [tab, setTab] = useState("hub");
   const [students, setStudents] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
+  const [sessions, setSessions] = useState([]);
   const [deptFilter, setDeptFilter] = useState("ALL");
+  const [q, setQ] = useState("");
+  const [logFilter, setLogFilter] = useState("Logs (All)");
 
-  // Video-stream states
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [detections, setDetections] = useState([]);
   const [logs, setLogs] = useState([]);
 
-  // DevOps telemetry states
   const [telemetry, setTelemetry] = useState({
-    phase: "starting",
-    model_ready: false,
-    db_connected: false,
-    uptime_s: 0,
-    active_session: {},
+    phase: "starting", marp_state: "UNINITIALIZED", stage: "UNINITIALIZED",
+    model_ready: false, db_connected: false, uptime_s: 0, active_session: {},
   });
   const [ready, setReady] = useState(null);
-  const [latency, setLatency] = useState(null);
   const [chaosMsg, setChaosMsg] = useState("");
-
-  // DevOps terminal log (timestamped, color-coded, scrollable)
+  const [delay, setDelay] = useState(0);
+  const [refuse, setRefuse] = useState(false);
+  const [dropRate, setDropRate] = useState(0);
+  const [vram, setVram] = useState(false);
+  const [modelStall, setModelStall] = useState(false);
+  const [sessionName, setSessionName] = useState("Morning Session");
   const [termLog, setTermLog] = useState(() => ([
-    { id: 0, time: new Date().toLocaleTimeString("en-GB"),
-      text: "terminal online — polling /healthz/readiness every 2s", tone: "dim" },
+    { id: 0, time: new Date().toLocaleTimeString("en-GB"), text: "TERMINAL ONLINE — POLLING READINESS EVERY 2S" },
   ]));
-  const pushTerm = useCallback((text, tone = "info") => {
+  const pushTerm = useCallback((text) => {
     const time = new Date().toLocaleTimeString("en-GB");
-    setTermLog((p) => [...p.slice(-119),
-      { id: Date.now() + Math.random(), time, text, tone }]);
+    setTermLog((p) => [...p.slice(-119), { id: Date.now() + Math.random(), time, text }]);
   }, []);
-  const clearTerm = useCallback(() => setTermLog([]), []);
 
-  // Populate students from production API
   const refreshStudents = useCallback(async () => {
     try {
       setStudents(await api("/api/students"));
-    } catch {
-      /* backend loading / unreachable */
-    }
-  }, []);
+    } catch (e) { handleApiError(e); /* loading */ }
+  }, [handleApiError]);
 
-  // Populate attendance logs (primary + fallbacks, all real API)
-  const refreshAttendanceLogs = useCallback(async () => {
-    try {
-      const r = await api("/api/attendance/logs");
-      setAttendanceLogs(Array.isArray(r) ? r : r.records || r.logs || []);
-      return;
-    } catch {
-      /* endpoint may not exist on this backend build — fall through */
-    }
+  const refreshLogs = useCallback(async () => {
     try {
       const sid = telemetryRef.current?.active_session?.id;
-      const url = sid
-        ? `/api/attendance/roster?session_id=${sid}`
-        : "/api/attendance/roster";
+      const url = sid ? `/api/attendance/roster?session_id=${sid}` : "/api/attendance/roster";
       const r = await api(url);
       setAttendanceLogs(r.records || []);
-    } catch {
-      try {
-        const r = await api("/api/logs?limit=50");
-        setAttendanceLogs(
-          (Array.isArray(r) ? r : []).map((e) => ({
-            student_id: "—",
-            name: e.detection_type || "face",
-            status: "Detected",
-            marked_at: e.timestamp,
-            confidence: e.confidence,
-          }))
-        );
-      } catch {
-        /* leave previous state */
-      }
-    }
-  }, []);
+      return;
+    } catch (e) { if (handleApiError(e)) return; /* fall through */ }
+    try {
+      const r = await api("/api/logs?limit=50");
+      setAttendanceLogs(
+        (Array.isArray(r) ? r : []).map((e) => ({
+          student_id: "—", name: e.detection_type || "face", status: "Detected",
+          marked_at: e.timestamp, confidence: e.confidence,
+        }))
+      );
+    } catch (e) { handleApiError(e); /* leave */ }
+  }, [handleApiError]);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      setSessions(await api("/api/attendance/sessions?limit=20"));
+    } catch (e) { handleApiError(e); /* backend unreachable */ }
+  }, [handleApiError]);
+
   const telemetryRef = useRef(telemetry);
   telemetryRef.current = telemetry;
 
   useEffect(() => {
     refreshStudents();
-    refreshAttendanceLogs();
+    refreshLogs();
+    refreshSessions();
     const id = setInterval(() => {
       refreshStudents();
-      refreshAttendanceLogs();
+      refreshLogs();
+      refreshSessions();
     }, 5000);
     return () => clearInterval(id);
-  }, [refreshStudents, refreshAttendanceLogs]);
+  }, [refreshStudents, refreshLogs, refreshSessions]);
 
-  // 1. Webcam for Live Scanner tab
+  // Webcam for scanner tab. mediaDevices is absent in some browsers and in
+  // insecure contexts — guard it so a missing camera never crashes the app.
+  const [cameraError, setCameraError] = useState("");
   useEffect(() => {
     if (role !== "Admin" || tab !== "scanner") return;
+    setCameraError("");
+    const md = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
+    if (!md || typeof md.getUserMedia !== "function") {
+      setCameraError("CAMERA UNAVAILABLE IN THIS BROWSER — LIVE DETECTION OFF.");
+      return;
+    }
     let stream;
-    navigator.mediaDevices
-      .getUserMedia({ video: true })
+    md.getUserMedia({ video: true })
       .then((s) => {
         stream = s;
         if (videoRef.current) videoRef.current.srcObject = s;
       })
-      .catch(() => {});
+      .catch(() => setCameraError("CAMERA BLOCKED — ALLOW WEBCAM ACCESS."));
     return () => stream?.getTracks().forEach((t) => t.stop());
   }, [role, tab]);
 
-  // 2. Neon bounding-box overlay (#00FF00, 2px + name badges)
+  // Bounding-box overlay: black fill + lime box, mono badges
   useEffect(() => {
     const c = canvasRef.current,
       v = videoRef.current;
@@ -202,36 +169,46 @@ export default function App() {
       sy = c.height / (v.videoHeight || 1);
     detections.forEach((d) => {
       const [x, y, w, h] = d.bbox;
-      ctx.strokeStyle = "#00FF00";
-      ctx.lineWidth = 2;
+      ctx.fillStyle = "#E2FF00";
+      ctx.fillRect(x * sx, y * sy, w * sx, h * sy);
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 3;
       ctx.strokeRect(x * sx, y * sy, w * sx, h * sy);
-      ctx.font = "12px sans-serif";
+      ctx.font = "bold 12px monospace";
       const label = d.label || `${d.name || d.type} ${d.confidence ?? ""}`;
       const tw = ctx.measureText(label).width;
-      ctx.fillStyle = "#00FF00";
-      ctx.fillRect(x * sx, y * sy - 16, tw + 8, 16);
       ctx.fillStyle = "#000";
-      ctx.fillText(label, x * sx + 4, y * sy - 4);
+      ctx.fillRect(x * sx, y * sy - 18, tw + 10, 18);
+      ctx.fillStyle = "#E2FF00";
+      ctx.fillText(label, x * sx + 5, y * sy - 5);
     });
   }, [detections]);
 
-  // 3. Detection loop: snapshot -> POST /api/detect
+  // Detection loop
   useEffect(() => {
+    if (role !== "Admin" || tab !== "scanner") return;
     const id = setInterval(async () => {
       const v = videoRef.current;
       if (!v || !v.videoWidth) return;
-      const t0 = performance.now();
       try {
+        const token = sessionToken();
         const r = await fetch(`${API}/api/detect`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify({ image: snapshot(v) }),
         });
+        if (r.status === 401 || r.status === 403) {
+          localStorage.removeItem(SESSION_KEY);
+          setSession(null);
+          return;
+        }
         const data = await r.json();
-        setLatency(Math.round(performance.now() - t0));
         if (data.detections) {
           setDetections(data.detections);
-          if (data.detections.length)
+          if (data.detections.length) {
             setLogs((p) =>
               [
                 ...data.detections.map((d, i) => ({
@@ -242,738 +219,312 @@ export default function App() {
                 ...p,
               ].slice(0, 20)
             );
+            refreshLogs();
+          }
         }
-      } catch {
-        /* backend down / loading */
-      }
+      } catch { /* backend loading */ }
     }, 700);
     return () => clearInterval(id);
-  }, []);
+  }, [role, tab, refreshLogs]);
 
-  // 4. Telemetry poll + terminal tail for every readiness result
+  // Telemetry poll (MARP v1 -> legacy fallback). R1: /status endpoints
+  // require a valid login, so the poll sends the Bearer token like api().
+  // Readiness probes stay open and need no token.
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const t0 = performance.now();
-        const [s, h] = await Promise.all([
-          fetch(`${API}/api/status`).then((r) => r.json()),
-          fetch(`${API}/healthz/readiness`)
-            .then(async (r) => {
-              let body = {};
-              try {
-                body = await r.json();
-              } catch {
-                /* non-JSON */
+        const token = sessionToken();
+        const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+        const status = await fetch(`${API}/api/v1/marp/status`, { headers: authHeaders })
+          .then(async (r) => {
+            if (r.status === 401 || r.status === 403) {
+              localStorage.removeItem(SESSION_KEY);
+              setSession(null);
+              throw new Error("unauthorized");
+            }
+            return r.json();
+          })
+          .catch((e) => {
+            if (e?.message === "unauthorized") throw e;
+            return fetch(`${API}/api/status`, { headers: authHeaders }).then(async (r) => {
+              if (r.status === 401 || r.status === 403) {
+                localStorage.removeItem(SESSION_KEY);
+                setSession(null);
+                throw new Error("unauthorized");
               }
-              return { ok: r.ok, status: r.status, error: body.error || body.phase || "" };
-            })
-            .catch(() => null),
-        ]);
-        setTelemetry(s);
-        setLatency((l) => l ?? Math.round(performance.now() - t0));
+              return r.json();
+            });
+          });
+        const h = await fetch(`${API}/api/v1/marp/healthz/readiness`)
+          .then(async (r) => {
+            let body = {};
+            try {
+              body = await r.json();
+            } catch { /* non-JSON */ }
+            return { ok: r.ok, status: r.status, error: body.error || body.phase || "" };
+          })
+          .catch(() =>
+            fetch(`${API}/healthz/readiness`)
+              .then(async (r) => {
+                let body = {};
+                try {
+                  body = await r.json();
+                } catch { /* non-JSON */ }
+                return { ok: r.ok, status: r.status, error: body.error || body.phase || "" };
+              })
+              .catch(() => null)
+          );
+        setTelemetry({
+          phase: status.phase || "—",
+          marp_state: status.marp_state || "—",
+          stage: status.stage || status.metrics?.stage || status.marp_state || "—",
+          model_ready: !!status.model_ready,
+          db_connected: !!(status.db_connected ?? status.db_ready),
+          uptime_s: status.uptime_s ?? 0,
+          active_session: status.active_session || {},
+        });
         setReady(h ? h.ok : false);
-        if (!h) {
-          pushTerm("Health Check: unreachable — connection refused", "err");
-        } else if (h.ok) {
-          pushTerm(`Health Check: 200 OK (${s.phase || "ready"})`, "ok");
-        } else if (/reload/i.test(`${h.error} ${s.phase || ""}`)) {
-          pushTerm(`Health Check: ${h.status} — recovering (${s.phase || h.error})`, "warn");
-        } else {
-          pushTerm(`Health Check: ${h.status} — ${h.error || "failure"}`, "err");
-        }
+        if (!h) pushTerm("HEALTH CHECK: UNREACHABLE — CONNECTION REFUSED");
+        else if (h.ok) pushTerm(`HEALTH CHECK: 200 OK (${status.phase || "ready"})`);
+        else pushTerm(`HEALTH CHECK: ${h.status} — ${h.error || "failure"}`);
       } catch {
         setReady(false);
-        pushTerm("Health Check: poll failed", "err");
+        pushTerm("HEALTH CHECK: POLL FAILED");
       }
     }, 2000);
     return () => clearInterval(id);
   }, [pushTerm]);
 
-  // 5. Chaos controls -> granular endpoints, action logged BEFORE the POST
   const chaos = async (kind) => {
-    const labels = {
-      "db-drop": "DB Drop", "db_drop": "DB Drop",
-      "unload-model": "Model Unload", "model_unload": "Model Unload",
-      recover: "Recovery",
-    };
     const endpoints = {
-      "db-drop": "/api/chaos/db-drop", "db_drop": "/api/chaos/db-drop",
-      "unload-model": "/api/chaos/unload-model", "model_unload": "/api/chaos/unload-model",
+      "db-drop": "/api/chaos/db-drop",
+      "unload-model": "/api/chaos/unload-model",
       recover: "/api/chaos/recover",
     };
-    pushTerm(`SYSTEM ADMIN: Initiating ${labels[kind] || kind}...`, "info");
+    pushTerm(`CHAOS INJECT: ${kind.toUpperCase()}...`);
     try {
       const r = await api(endpoints[kind] || "/api/chaos/db-drop", { method: "POST" });
-      setChaosMsg(`Chaos [${kind}] -> ${r.phase}`);
-      pushTerm(`backend: ${r.message || r.phase}`, kind === "recover" ? "warn" : "err");
-    } catch {
-      setChaosMsg("Chaos request failed (backend unreachable)");
-      pushTerm("backend unreachable — command failed", "err");
+      setChaosMsg(`CHAOS [${kind}] -> ${r.phase}`);
+      pushTerm(`BACKEND: ${r.message || r.phase}`);
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) {
+        localStorage.removeItem(SESSION_KEY);
+        setSession(null);
+        return;
+      }
+      setChaosMsg(e?.status === 403
+        ? "CHAOS DENIED — OPERATOR PRIVILEGES REQUIRED. PLEASE RE-LOGIN."
+        : "CHAOS REQUEST FAILED (BACKEND UNREACHABLE)");
+      pushTerm("BACKEND UNREACHABLE — COMMAND FAILED");
     }
+  };
+
+  const applyChaos = async () => {
+    pushTerm(`CHAOS INJECT: DELAY=${delay}S REFUSE=${refuse} DROP=${dropRate} VRAM=${vram} STALL=${modelStall}`);
+    try {
+      const r = await api("/api/v1/marp/chaos/inject", {
+        method: "POST",
+        body: JSON.stringify({
+          simulated_latency_sec: Number(delay),
+          frame_drop_rate: Number(dropRate),
+          simulate_vram_exhaustion: vram,
+          artificial_probe_failure: refuse,
+          model_stall: modelStall,
+        }),
+      });
+      setChaosMsg(`INJECTED: ${JSON.stringify(r.chaos)}`);
+      pushTerm("BACKEND: CHAOS APPLIED LIVE (NO RESTART)");
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) {
+        localStorage.removeItem(SESSION_KEY);
+        setSession(null);
+        return;
+      }
+      setChaosMsg("INJECT FAILED — NEEDS /api/v1 BACKEND");
+      pushTerm("INJECT FAILED");
+    }
+  };
+
+  const startSession = async () => {
+    const name = (sessionName || "").trim() || "Morning Session";
+    try {
+      await api("/api/attendance/start", { method: "POST", body: JSON.stringify({ session_name: name }) });
+      refreshLogs();
+    } catch (e) { if (!handleApiError(e)) pushTerm(`START FAILED: ${e.message}`); }
+  };
+  const stopSession = async () => {
+    try {
+      await api("/api/attendance/stop", { method: "POST" });
+      refreshLogs();
+    } catch (e) { if (!handleApiError(e)) pushTerm(`STOP FAILED: ${e.message}`); }
   };
 
   const logout = () => {
     localStorage.removeItem(SESSION_KEY);
     setSession(null);
+    setConfirmLogout(false);
   };
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const logoutDialog = confirmLogout && (
+    <FaModalFrame
+      title="Log out?"
+      description="You will need your username and password to sign in again."
+      onCancel={() => setConfirmLogout(false)}
+      actions={
+        <>
+          <FaButton variant="secondary" onClick={() => setConfirmLogout(false)}>
+            Stay signed in
+          </FaButton>
+          <FaButton variant="danger" onClick={logout}>
+            Log out
+          </FaButton>
+        </>
+      }
+    />
+  );
 
   const filteredStudents =
-    deptFilter === "ALL"
-      ? students
-      : students.filter((s) => s.branch === deptFilter);
+    deptFilter === "ALL" ? students : students.filter((s) => s.branch === deptFilter);
+  const rows = filteredStudents.filter(
+    (s) => s.name.toLowerCase().includes(q.toLowerCase()) || s.student_id.includes(q)
+  );
+  const present = attendanceLogs.filter((r) => r.status === "Present").length;
 
-  // Login gate (after all hooks so hook order never changes)
   if (!session) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-900 to-zinc-950 font-sans flex items-center justify-center p-4">
+      <main className="fa-page" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
         <LoginScreen
           onLogin={(s) => {
             localStorage.setItem(SESSION_KEY, JSON.stringify(s));
             setSession(s);
           }}
         />
-      </div>
+      </main>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-900 to-zinc-950 font-sans">
-      {/* Floating navbar pill */}
-      <div className="px-4">
-        <header className="mx-auto mt-4 max-w-7xl bg-zinc-900/80 border border-zinc-800 rounded-full px-6 py-3 flex flex-wrap gap-3 justify-between items-center backdrop-blur-md">
-          <p className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500 font-extrabold text-xl tracking-tight">
-            KL UNIVERSITY — FACE ATTENDANCE PORTAL
-          </p>
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-zinc-300 border border-zinc-700 rounded-full px-3 py-1.5">
-              {role === "Admin" ? "Admin (Teacher)" : "Student"} • {session.username}
-            </span>
-            <button
-              onClick={logout}
-              className="text-xs font-bold text-zinc-400 hover:text-zinc-100 border border-zinc-700 hover:border-zinc-500 rounded-full px-3 py-1.5 transition"
-            >
-              Logout
-            </button>
-            <span className={`px-3 py-1.5 rounded-full text-xs font-bold ${ready ? READY_BADGE : BAD_BADGE}`}>
-              {ready === null ? "…" : ready ? "READY ●" : "UNHEALTHY ●"}
-            </span>
-          </div>
+  const marpOnline = ready === true;
+  if (session && role === "Student") {
+    return (
+      <div className="fa-page">
+        <div className="w-full space-y-4 p-4 lg:p-6" style={{ maxWidth: 1200, margin: "0 auto" }}>
+        <header>
+          <FaCard glass>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "space-between", alignItems: "center", padding: "12px 16px" }}>
+              <p className="fa-brand-gradient" style={{ fontWeight: 800, fontSize: "var(--fa-t-lg)", letterSpacing: "0.04em", margin: 0 }}>FACEATTEND</p>
+              <FaButton variant="danger" onClick={() => setConfirmLogout(true)}>
+                Log out
+              </FaButton>
+            </div>
+          </FaCard>
         </header>
-
-        {role === "Admin" && (
-          <nav className="mx-auto max-w-7xl px-2 pt-3 flex gap-2">
-            {[
-              ["hub", "College Hub"],
-              ["enroll", "Enroll Student"],
-              ["scanner", "Live Scanner"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={`px-5 py-2 text-sm font-bold rounded-full transition ${
-                  tab === key
-                    ? "bg-blue-600 text-white shadow-lg"
-                    : "text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-        )}
+        {logoutDialog}
+        <main>
+          <StudentPortal lockedId={session.student_id || session.username} />
+        </main>
       </div>
+      </div>
+    );
+  }
+  const brandMark = (
+    <span
+      style={{
+        display: "inline-flex", height: 40, width: 40, alignItems: "center", justifyContent: "center",
+        borderRadius: "var(--fa-r-sm)", border: "1px solid var(--fa-border)", background: "var(--fa-bg)",
+      }}
+      aria-hidden="true"
+    >
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5l8-3z" fill="#5EDBC6" />
+        <path d="M8.5 12l2.5 2.5 4.5-5" stroke="#0B1220" strokeWidth="2" fill="none" strokeLinecap="round" />
+      </svg>
+    </span>
+  );
+  return (
+    <div className="fa-page">
+      <div className="w-full space-y-4 p-4 lg:p-6" style={{ maxWidth: 1200, margin: "0 auto" }}>
+        <header>
+          <FaCard>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "space-between", alignItems: "center", padding: "12px 16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {brandMark}
+                <p className="fa-brand-gradient" style={{ fontWeight: 800, fontSize: "var(--fa-t-lg)", letterSpacing: "0.04em", margin: 0 }}>FACEATTEND</p>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <FaStatusIndicator tone="info">
+                  {role === "Admin" ? "Admin" : `Student ${session.username || ""}`}
+                </FaStatusIndicator>
+                <FaButton variant="danger" onClick={() => setConfirmLogout(true)}>
+                  Log out
+                </FaButton>
+              </div>
+            </div>
+          </FaCard>
+        </header>
+        {logoutDialog}
 
-      <main className="mx-auto max-w-7xl p-4">
         {role === "Student" ? (
           <StudentPortal lockedId={session.student_id || session.username} />
-        ) : tab === "hub" ? (
-          <HubTab
-            students={students}
-            filtered={filteredStudents}
-            deptFilter={deptFilter}
-            setDeptFilter={setDeptFilter}
-            telemetry={telemetry}
-            ready={ready}
-          />
+        ) : (
+          <div className="flex flex-col gap-4 lg:flex-row">
+          <FaCard glass className="w-full lg:w-64 shrink-0 self-start lg:sticky lg:top-4" role="complementary" aria-label="Navigation and system status">
+            <nav aria-label="Primary" className="flex flex-row lg:flex-col flex-wrap gap-2" style={{ padding: 12 }}>
+              {[
+                ["hub", "▦ Dashboard"],
+                ["enroll", "◉ Students"],
+                ["scanner", "▶ Attendance"],
+                ["settings", "⚙ Settings"],
+              ].map(([key, label]) => (
+                <FaButton
+                  key={key}
+                  variant="secondary"
+                  aria-pressed={tab === key}
+                  aria-current={tab === key ? "page" : undefined}
+                  onClick={() => setTab(key)}
+                >
+                  {label}
+                </FaButton>
+              ))}
+            </nav>
+              <FaCard glass style={{ margin: 12, padding: 12 }}>
+                <p style={{ fontSize: "var(--fa-t-xs)", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--fa-text-muted)", margin: "0 0 4px" }}>System status</p>
+                <FaStatusIndicator tone={marpOnline ? "ok" : "err"}>
+                  {marpOnline ? "Online" : "Offline"}
+                </FaStatusIndicator>
+                <p style={{ fontFamily: "var(--fa-mono)", fontSize: "var(--fa-t-xs)", margin: "8px 0 0" }}>
+                  {marpOnline ? "MARP READY · 200 OK" : `503 · ${String(telemetry.stage || "initializing").toUpperCase()}`}
+                </p>
+              </FaCard>
+            </FaCard>
+            <main className="min-w-0 flex-1">
+              <div className="fa-page-enter" key={tab}>
+        {tab === "hub" ? (
+          <HubDashboard students={students} sessions={sessions} telemetry={telemetry} setTab={setTab} logFilter={logFilter} setLogFilter={setLogFilter} />
         ) : tab === "enroll" ? (
-          <EnrollTab onDone={() => { refreshStudents(); setTab("hub"); }} />
+          <EnrollTab branches={BRANCHES} angles={ANGLES} onDone={() => { refreshStudents(); setTab("hub"); }} />
+        ) : tab === "settings" ? (
+          <SettingsView
+            telemetry={telemetry} ready={ready} chaosMsg={chaosMsg} chaos={chaos}
+            delay={delay} setDelay={setDelay} refuse={refuse} setRefuse={setRefuse}
+            dropRate={dropRate} setDropRate={setDropRate} vram={vram} setVram={setVram}
+            modelStall={modelStall} setModelStall={setModelStall}
+            applyChaos={applyChaos} termLog={termLog}
+          />
         ) : (
-          <ScannerTab
-            videoRef={videoRef}
-            canvasRef={canvasRef}
-            logs={logs}
-            telemetry={telemetry}
-            ready={ready}
-            latency={latency}
-            chaosMsg={chaosMsg}
-            chaos={chaos}
-            dot={dot}
-            students={students}
-            attendanceLogs={attendanceLogs}
-            termLog={termLog}
-            clearTerm={clearTerm}
+          <ScannerView
+            videoRef={videoRef} canvasRef={canvasRef} logs={logs}
+            attendanceLogs={attendanceLogs} present={present}
+            telemetry={telemetry} marpOnline={marpOnline}
+            cameraError={cameraError}
+            sessionName={sessionName} onSessionName={setSessionName}
+            onStartSession={startSession} onStopSession={stopSession}
           />
         )}
-      </main>
-    </div>
-  );
-}
-
-/* ==================== Basic Login Gate ==================== */
-function LoginScreen({ onLogin }) {
-  const [mode, setMode] = useState("Admin");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (e) => {
-    e?.preventDefault();
-    setErr("");
-    const u = username.trim();
-    if (mode === "Admin") {
-      if (u !== TEST_ADMIN.username || password !== TEST_ADMIN.password) {
-        setErr("Invalid admin credentials — use the test account below.");
-        return;
-      }
-    } else {
-      if (!u) {
-        setErr("Enter your Roll No. / Student ID.");
-        return;
-      }
-      if (password !== TEST_STUDENT_PASSWORD) {
-        setErr("Invalid student password — use the test password below.");
-        return;
-      }
-    }
-    setBusy(true);
-    try {
-      const ctx = await api("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ username: u, role: mode.toLowerCase() }),
-      });
-      onLogin(
-        mode === "Admin"
-          ? { role: "Admin", username: ctx.username || u, name: ctx.name || "Class Teacher" }
-          : {
-              role: "Student",
-              username: u,
-              student_id: ctx.student_id || u,
-              name: ctx.name || u,
-              branch: ctx.branch || "",
-            }
-      );
-    } catch {
-      onLogin(
-        mode === "Admin"
-          ? { role: "Admin", username: u, name: "Class Teacher" }
-          : { role: "Student", username: u, student_id: u, name: u, branch: "" }
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className={`w-full max-w-md ${GLASS} p-6`}>
-      <p className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500 font-extrabold text-xl tracking-tight text-center">
-        KL UNIVERSITY
-      </p>
-      <p className="text-center text-xs text-zinc-500 mt-1">Face Attendance Portal — Sign In</p>
-      <div className="flex bg-zinc-800 rounded-full p-1 text-xs font-bold border border-zinc-700 mt-4">
-        {["Admin", "Student"].map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => { setMode(m); setErr(""); }}
-            className={`flex-1 px-4 py-1.5 rounded-full transition ${
-              mode === m ? "bg-blue-600 text-white shadow-lg" : "text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            {m === "Admin" ? "Admin (Teacher)" : "Student"}
-          </button>
-        ))}
-      </div>
-      <form onSubmit={submit} className="space-y-3 mt-4">
-        <div>
-          <label className="text-xs font-bold text-zinc-400">
-            {mode === "Admin" ? "Username" : "Roll No. / Student ID"}
-          </label>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder={mode === "Admin" ? "admin" : "2100030001"}
-            autoComplete="username"
-            className={`${INPUT} mt-1`}
-          />
-        </div>
-        <div>
-          <label className="text-xs font-bold text-zinc-400">Password</label>
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            placeholder="••••••••"
-            autoComplete="current-password"
-            className={`${INPUT} mt-1`}
-          />
-        </div>
-        {err && (
-          <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/40 rounded-xl px-3 py-2">{err}</p>
-        )}
-        <button
-          type="submit"
-          disabled={busy}
-          className={`${BTN_BRUTAL} w-full bg-blue-600 hover:bg-blue-500 text-white border-blue-800 disabled:opacity-50`}
-        >
-          {busy ? "Signing in…" : `Login as ${mode}`}
-        </button>
-      </form>
-      <div className="mt-4 text-[11px] font-mono text-zinc-500 bg-zinc-950 border border-zinc-800 rounded-xl p-3 space-y-1">
-        <p className="font-bold text-zinc-400">TEST ACCOUNTS (for demo/judges)</p>
-        <p>Admin — user: <span className="text-zinc-200">admin</span> pass: <span className="text-zinc-200">admin123</span></p>
-        <p>Student — roll no: <span className="text-zinc-200">any ID</span> pass: <span className="text-zinc-200">student123</span></p>
-      </div>
-    </div>
-  );
-}
-
-/* ==================== Tab 1: College Hub & Overview ==================== */
-function HubTab({ students, filtered, deptFilter, setDeptFilter, telemetry, ready }) {
-  const active = telemetry.active_session;
-  const metrics = [
-    { label: "Registered Students", value: String(students.length), sub: "live from /api/students" },
-    {
-      label: "Active Session Status",
-      value: active?.id ? `LIVE #${active.id}` : "Idle",
-      sub: active?.id ? active.name || "session running" : "no session running",
-    },
-    {
-      label: "System Health",
-      value: ready === null ? "…" : ready ? "Optimal" : "Degraded",
-      sub: `phase: ${telemetry.phase}`,
-    },
-  ];
-  return (
-    <div className="space-y-4">
-      <div className="grid md:grid-cols-3 gap-4">
-        {metrics.map((m) => (
-          <div key={m.label} className={`${GLASS} p-5`}>
-            <p className="text-xs font-bold text-zinc-400 uppercase tracking-tight">{m.label}</p>
-            <p className="text-3xl font-extrabold tracking-tight mt-1">{m.value}</p>
-            <p className="text-xs text-zinc-500 mt-1 font-mono">{m.sub}</p>
-          </div>
-        ))}
-      </div>
-      <div className={`${GLASS} p-4`}>
-        <p className="text-xs font-bold text-zinc-400 tracking-tight mb-2">DEPARTMENT QUICK FILTER</p>
-        <div className="flex flex-wrap gap-2">
-          {FILTERS.map((f) => (
-            <button
-              key={f.code}
-              onClick={() => setDeptFilter(f.code)}
-              className={`px-4 py-1.5 text-xs font-bold rounded-full transition ${
-                deptFilter === f.code
-                  ? "bg-blue-600 text-white shadow-lg"
-                  : "bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-700"
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className={`${GLASS} overflow-hidden`}>
-        <h3 className="font-bold tracking-tight text-sm p-4 border-b border-zinc-800">
-          Student Directory {deptFilter !== "ALL" ? `— ${deptFilter}` : ""} ({filtered.length})
-        </h3>
-        {filtered.length === 0 ? (
-          <p className="p-8 text-center text-sm text-zinc-500">
-            No Students Enrolled Yet - Go to Enroll Tab
-          </p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-800/60 text-xs text-zinc-400">
-              <tr>
-                <th className="text-left p-3">Student ID</th>
-                <th className="text-left p-3">Name</th>
-                <th className="text-left p-3">Department</th>
-                <th className="text-left p-3">Enrolled On</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((s) => (
-                <tr key={s.student_id} className="border-t border-zinc-800">
-                  <td className="p-3 font-mono text-xs">{s.student_id}</td>
-                  <td className="p-3">{s.name}</td>
-                  <td className="p-3">{s.branch}</td>
-                  <td className="p-3 text-xs text-zinc-500">
-                    {s.created_at ? new Date(s.created_at).toLocaleDateString() : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ==================== Tab 2: Student Enrollment ==================== */
-function EnrollTab({ onDone }) {
-  const enrollVideoRef = useRef(null);
-  const [form, setForm] = useState({
-    student_id: "",
-    name: "",
-    branch: "CSE",
-    degree: "B.Tech",
-    phone: "",
-    email: "",
-    address: "",
-  });
-  const [shots, setShots] = useState([null, null, null, null]);
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  useEffect(() => {
-    let stream;
-    navigator.mediaDevices
-      .getUserMedia({ video: true })
-      .then((s) => {
-        stream = s;
-        if (enrollVideoRef.current) enrollVideoRef.current.srcObject = s;
-      })
-      .catch(() => setMsg("Camera blocked — allow webcam access."));
-    return () => stream?.getTracks().forEach((t) => t.stop());
-  }, []);
-
-  const capture = (i) => {
-    if (!enrollVideoRef.current?.videoWidth) return;
-    const next = [...shots];
-    next[i] = snapshot(enrollVideoRef.current);
-    setShots(next);
-  };
-  const doneCount = shots.filter(Boolean).length;
-
-  const submit = async () => {
-    if (!form.student_id.trim() || !form.name.trim()) {
-      setMsg("Student ID and Full Name are required.");
-      return;
-    }
-    if (doneCount < 4) {
-      setMsg(`Capture all 4 angles first (${doneCount}/4 done).`);
-      return;
-    }
-    setBusy(true);
-    setMsg("Uploading student + vector embeddings…");
-    try {
-      const r = await api("/api/students/enroll", {
-        method: "POST",
-        body: JSON.stringify({ ...form, images: shots }),
-      });
-      setMsg(`Enrolled ${r.name} (${r.student_id}) — ${r.angles_used} angles embedded.`);
-      setShots([null, null, null, null]);
-      onDone();
-    } catch (e) {
-      setMsg(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="grid lg:grid-cols-2 gap-4">
-      <div className={`${GLASS} p-5 space-y-3`}>
-        <h2 className="font-extrabold tracking-tight">Student Profile</h2>
-        <div>
-          <label className="text-xs font-bold text-zinc-400">Student ID / Roll No.</label>
-          <input value={form.student_id} onChange={set("student_id")} placeholder="2100030001" className={`${INPUT} mt-1`} />
-        </div>
-        <div>
-          <label className="text-xs font-bold text-zinc-400">Full Name</label>
-          <input value={form.name} onChange={set("name")} placeholder="Enter full name" className={`${INPUT} mt-1`} />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs font-bold text-zinc-400">Department / Branch</label>
-            <select value={form.branch} onChange={set("branch")} className={`${INPUT} mt-1`}>
-              {DEPTS.map((d) => (
-                <option key={d.code} value={d.code}>{d.label}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-bold text-zinc-400">Degree Program</label>
-            <select value={form.degree} onChange={set("degree")} className={`${INPUT} mt-1`}>
-              {DEGREES.map((d) => (
-                <option key={d}>{d}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-xs font-bold text-zinc-400">Phone Number</label>
-            <input value={form.phone} onChange={set("phone")} placeholder="+91 …" className={`${INPUT} mt-1`} />
-          </div>
-          <div>
-            <label className="text-xs font-bold text-zinc-400">Email Address</label>
-            <input value={form.email} onChange={set("email")} placeholder="name@university.edu" className={`${INPUT} mt-1`} />
-          </div>
-        </div>
-        <div>
-          <label className="text-xs font-bold text-zinc-400">Residential Address</label>
-          <textarea value={form.address} onChange={set("address")} rows={2} placeholder="Street, city, state" className={`${INPUT} mt-1`} />
-        </div>
-      </div>
-      <div className={`${GLASS} p-5 space-y-3`}>
-        <div className="flex items-center justify-between">
-          <h2 className="font-extrabold tracking-tight">4-Angle Face Scan</h2>
-          <span className="text-xs font-bold bg-blue-600/20 text-blue-300 border border-blue-500/40 rounded-full px-2 py-0.5">
-            {doneCount}/4
-          </span>
-        </div>
-        <video ref={enrollVideoRef} autoPlay muted playsInline className="w-full rounded-xl bg-black aspect-video object-cover border border-zinc-700" />
-        <div className="grid grid-cols-4 gap-2">
-          {ANGLES.map((a, i) => (
-            <button
-              key={a}
-              onClick={() => capture(i)}
-              className={`rounded-xl border-2 overflow-hidden text-[11px] font-bold transition ${
-                shots[i] ? "border-green-500" : "border-dashed border-zinc-700 hover:border-blue-500"
-              }`}
-            >
-              {shots[i] ? (
-                <img src={shots[i]} alt={a} className="w-full aspect-square object-cover" />
-              ) : (
-                <span className="block py-5 text-zinc-500">◌<br />{a}</span>
-              )}
-              <span className={`block py-1 ${shots[i] ? "bg-green-500/10 text-green-400" : "bg-zinc-800 text-zinc-500"}`}>
-                {shots[i] ? `✓ ${a}` : a}
-              </span>
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={submit}
-          disabled={busy}
-          className={`${BTN_BRUTAL} w-full bg-blue-600 hover:bg-blue-500 text-white border-blue-800 disabled:opacity-50`}
-        >
-          {busy ? "Saving…" : "Save Student & Vector Embeddings"}
-        </button>
-        {msg && <p className="text-xs font-mono text-zinc-400 bg-zinc-950 border border-zinc-800 rounded-xl p-2">{msg}</p>}
-      </div>
-    </div>
-  );
-}
-
-/* ==================== Tab 3: Live Scanner + DevOps Terminal ==================== */
-function ScannerTab({ videoRef, canvasRef, logs, telemetry, ready, latency, chaosMsg, chaos, dot, students, attendanceLogs, termLog, clearTerm }) {
-  const termBoxRef = useRef(null);
-  useEffect(() => {
-    const el = termBoxRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [termLog]);
-  const deptOf = (id) => students.find((s) => s.student_id === id)?.branch || "—";
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 space-y-4">
-          <div className={`${GLASS} p-4`}>
-            <h2 className="text-sm font-bold tracking-tight mb-3">Live Camera Feed</h2>
-            <div className="relative border-2 border-zinc-700 rounded-xl overflow-hidden shadow-2xl bg-black">
-              <video ref={videoRef} autoPlay muted playsInline className="w-full" />
-              <canvas ref={canvasRef} width={640} height={480} className="absolute inset-0 w-full h-full" />
-            </div>
-          </div>
-          <div className={`${GLASS} p-4`}>
-            <h2 className="text-sm font-bold tracking-tight mb-2">Detection Log (live)</h2>
-            <ul className="h-40 overflow-y-auto font-mono text-sm space-y-1 text-zinc-300">
-              {logs.length === 0 && <li className="text-zinc-500">No detections yet…</li>}
-              {logs.map((l) => (
-                <li key={l.id}>
-                  [{l.time}] <span className="text-green-400">{l.label || l.name || l.detection_type || l.type}</span>{" "}
-                  conf={l.confidence} bbox=[{(l.bbox || []).join(",")}]
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-        <div className={`${GLASS} overflow-hidden h-fit`}>
-          <div className="flex items-center gap-1.5 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
-            <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-            <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
-            <span className="ml-1 text-[11px] font-mono text-zinc-500">devops — readiness tail</span>
-            <span className={`ml-auto px-2 py-0.5 rounded-full text-[11px] font-bold ${ready ? READY_BADGE : BAD_BADGE}`}>
-              {ready === null ? "…" : ready ? "READY ●" : "UNHEALTHY ●"}
-            </span>
-            <button onClick={clearTerm} className="text-[11px] font-mono text-zinc-500 hover:text-zinc-200 transition">clear</button>
-          </div>
-          <ul ref={termBoxRef} className="h-44 overflow-y-auto font-mono text-xs space-y-0.5 p-3 bg-black/60">
-            {termLog.map((e) => (
-              <li key={e.id} className={TONE[e.tone] || TONE.dim}>[{e.time}] {e.text}</li>
-            ))}
-          </ul>
-          <div className="p-4 space-y-2 border-t border-zinc-800">
-            <div className="space-y-2 font-mono text-sm text-zinc-300">
-              <div className="flex justify-between"><span className="text-zinc-500">&gt; phase</span><code className="text-blue-400">{telemetry.phase}</code></div>
-              <div className="flex justify-between items-center">
-                <span className="text-zinc-500">&gt; model</span>
-                <span className="flex items-center gap-2"><span className={`w-2.5 h-2.5 rounded-full ${dot(telemetry.model_ready)}`} />{telemetry.model_ready ? "loaded" : "loading"}</span>
               </div>
-              <div className="flex justify-between"><span className="text-zinc-500">&gt; pg_latency</span><code>{latency ?? "—"} ms</code></div>
-              <div className="flex justify-between"><span className="text-zinc-500">&gt; uptime</span><code>{telemetry.uptime_s}s</code></div>
-            </div>
-            <p className="text-xs font-bold text-zinc-400 tracking-tight">$ chaos_inject --</p>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => chaos("db-drop")} className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg border-b-4 border-red-800 active:border-b-0 active:translate-y-0.5 transition-all">DB drop</button>
-              <button onClick={() => chaos("unload-model")} className="px-3 py-1.5 text-xs bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-lg border-b-4 border-orange-800 active:border-b-0 active:translate-y-0.5 transition-all">Unload model</button>
-              <button onClick={() => chaos("recover")} className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg border-b-4 border-green-800 active:border-b-0 active:translate-y-0.5 transition-all">Recover</button>
-            </div>
-            {chaosMsg && <p className="font-mono text-xs text-zinc-500">{chaosMsg}</p>}
-          </div>
-        </div>
-      </div>
-      <div className={`${GLASS} overflow-hidden`}>
-        <h2 className="text-sm font-bold tracking-tight p-4 border-b border-zinc-800">
-          Live Attendance Roster ({attendanceLogs.length})
-        </h2>
-        {attendanceLogs.length === 0 ? (
-          <p className="p-8 text-center text-sm text-zinc-500">
-            No attendance records yet — start a session and face the camera.
-          </p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-800/60 text-xs text-zinc-400">
-              <tr>
-                <th className="text-left p-2">Student ID</th>
-                <th className="text-left p-2">Name</th>
-                <th className="text-left p-2">Department</th>
-                <th className="text-left p-2">Degree</th>
-                <th className="text-left p-2">Timestamp</th>
-                <th className="text-left p-2">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {attendanceLogs.map((r, i) => (
-                <tr key={r.student_id ? `${r.student_id}-${i}` : i} className="border-t border-zinc-800">
-                  <td className="p-2 font-mono text-xs">{r.student_id || "—"}</td>
-                  <td className="p-2">{r.name || "—"}</td>
-                  <td className="p-2">{r.branch || r.department || deptOf(r.student_id)}</td>
-                  <td className="p-2">{r.degree || "—"}</td>
-                  <td className="p-2 text-xs text-zinc-400 font-mono">
-                    {r.marked_at ? new Date(r.marked_at).toLocaleString() : r.time || "—"}
-                  </td>
-                  <td className="p-2">
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                      r.status === "Present"
-                        ? "bg-green-500/10 text-green-400 border border-green-500/50"
-                        : r.status === "Absent"
-                        ? "bg-zinc-700/40 text-zinc-400 border border-zinc-600/50"
-                        : "bg-blue-500/10 text-blue-300 border border-blue-500/40"
-                    }`}>
-                      {r.status || "Detected"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ==================== Student Portal (session-locked) ==================== */
-function StudentPortal({ lockedId }) {
-  const [sid, setSid] = useState(lockedId || "");
-  const [data, setData] = useState(null);
-  const [err, setErr] = useState("");
-  const lookup = async (id) => {
-    const target = (id ?? sid).trim();
-    if (!target) {
-      setErr("Enter your Student ID / Roll No.");
-      return;
-    }
-    try {
-      setData(await api(`/api/students/${encodeURIComponent(target)}/attendance`));
-      setErr("");
-    } catch {
-      setErr("No record found — check the ID or ask your teacher to enroll you.");
-      setData(null);
-    }
-  };
-  useEffect(() => {
-    if (lockedId) {
-      setSid(lockedId);
-      lookup(lockedId);
-    }
-  }, [lockedId]);
-  return (
-    <div className="space-y-4 max-w-3xl mx-auto">
-      <div className={`${GLASS} p-6`}>
-        <h2 className="text-xl font-extrabold tracking-tight">Student Portal 🎓</h2>
-        <p className="text-sm text-zinc-400 mt-1">Your live attendance, synced with the classroom scanner.</p>
-        {lockedId ? (
-          <p className="text-xs font-mono text-zinc-400 mt-3 border border-zinc-800 rounded-xl px-3 py-2">
-            Signed in as Roll No. <span className="text-zinc-100">{lockedId}</span>
-            <button onClick={() => lookup()} className="ml-3 text-blue-400 hover:text-blue-300 font-bold">↻ Refresh</button>
-          </p>
-        ) : (
-          <div className="flex gap-2 mt-3">
-            <input value={sid} onChange={(e) => setSid(e.target.value)} placeholder="e.g. 2100030001" className={INPUT} />
-            <button onClick={() => lookup()} className={`${BTN_BRUTAL} bg-blue-600 hover:bg-blue-500 text-white border-blue-800 whitespace-nowrap`}>
-              View
-            </button>
+            </main>
           </div>
         )}
-        {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
       </div>
-      {data && (
-        <div className={`${GLASS} overflow-hidden`}>
-          <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
-            <div>
-              <p className="font-extrabold tracking-tight">{data.name}</p>
-              <p className="text-xs text-zinc-500 font-mono">{data.student_id} • {data.branch}</p>
-            </div>
-            <p className="text-2xl font-extrabold tracking-tight text-blue-400">{data.percentage}%</p>
-          </div>
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-800/60 text-xs text-zinc-400">
-              <tr>
-                <th className="text-left p-3">Session</th>
-                <th className="text-left p-3">Date</th>
-                <th className="text-left p-3">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data.history || []).map((h) => (
-                <tr key={h.session_id} className="border-t border-zinc-800">
-                  <td className="p-3">{h.session_name}</td>
-                  <td className="p-3 text-xs text-zinc-500">{h.date}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-                      h.status === "Present"
-                        ? "bg-green-500/10 text-green-400 border border-green-500/50"
-                        : "bg-zinc-700/40 text-zinc-400 border border-zinc-600/50"
-                    }`}>
-                      {h.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {(data.history || []).length === 0 && (
-                <tr><td colSpan={3} className="p-4 text-xs text-zinc-500">No sessions recorded yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,0 +1,66 @@
+# FACEATTEND frontend (nginx :80 serving the CRA production bundle).
+#
+# API URL STRATEGY (resolved — see also docs/CONFIGURATION.md): the bundle
+# bakes its API base at BUILD time (CRA embeds REACT_APP_* only), so a pod
+# cannot learn the API host from environment at runtime. For Kubernetes:
+#   1. build a per-environment frontend image, e.g.
+#      docker build ./frontend \
+#        --build-arg REACT_APP_API_URL=https://faceattend.example.com \
+#        --build-arg VITE_API_URL=https://faceattend.example.com/api/v1 \
+#        -t ghcr.io/mithilesh5957/capstone_project-frontend:<tag>
+#   2. point the ingress below at your host; its /api/* rule proxies browser
+#      API calls to the backend ClusterIP, so browsers never need the
+#      cluster-internal service hostname.
+# A container-level VITE_API_URL env would be silently ignored by the
+# already-built bundle, so none is set here on purpose.
+# (No ConfigMap: the static bundle cannot read pod environment at runtime.
+# All frontend configuration is selected via docker build args — see above.)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faceattend-frontend
+  labels:
+    app: faceattend-frontend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: faceattend-frontend
+  template:
+    metadata:
+      labels:
+        app: faceattend-frontend
+    spec:
+      containers:
+        - name: faceattend-frontend
+          # Exact image pinned per release in kustomization.yaml (images:).
+          image: ghcr.io/mithilesh5957/capstone_project-frontend:main
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
