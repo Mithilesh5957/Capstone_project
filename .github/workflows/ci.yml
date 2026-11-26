@@ -61,12 +61,12 @@ jobs:
       - name: Wait for database healthy
         run: |
           for i in $(seq 1 24); do
-            if docker compose ps db --format json | grep -q '"Health":"Healthy"'; then
+            if docker compose ps db --format json | grep -qi '"Health":"healthy"'; then
               echo "db healthy"; break
             fi
             docker compose ps; sleep 5
           done
-          docker compose ps db --format json | grep -q '"Health":"Healthy"'
+          docker compose ps db --format json | grep -qi '"Health":"healthy"'
 
       - name: Wait for MARP READY (200) — proves VRAM warmup
         run: |
